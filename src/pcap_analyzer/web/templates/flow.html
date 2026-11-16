@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui with context %}
+{% block title %}{{ _("Flow graph") }}{% endblock %}
+{% block capture_nav %}{{ ui.capnav(a, "stats", issue_count) }}{% endblock %}
+{% block main %}
+{{ ui.crumbs([(_("Captures"), "/"), (m.filename, "/a/" ~ a.id), (_("Statistics"), "/a/" ~ a.id ~ "?tab=stats"), (_("Flow graph"), None)]) }}
+<header class="hero"><div class="hero-head"><div><h1>{{ _("Flow graph") }}</h1>
+  <p class="muted">{% if stream is not none %}{{ _("Connection {n}", n=stream) }}{% elif f.filter %}{{ f.filter }}{% else %}{{ _("All packets") }}{% endif %}</p></div></div></header>
+<section class="panel">
+  <form method="get" class="inline">
+    <label class="wide">{{ _("Wireshark display filter") }} <input name="filter" value="{{ flt or "" }}" spellcheck="false" placeholder="dns or icmp"></label>
+    <button>{{ _("Show flow graph") }}</button>
+  </form>
+  {% if f.rows %}{{ ui.flow(f) }}{% else %}<p class="empty">{{ _("No packets match.") }}</p>{% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui with context %}
+{% block title %}{{ _("Export objects") }}{% endblock %}
+{% block capture_nav %}{{ ui.capnav(a, "stats", issue_count) }}{% endblock %}
+{% block main %}
+{{ ui.crumbs([(_("Captures"), "/"), (m.filename, "/a/" ~ a.id), (_("Statistics"), "/a/" ~ a.id ~ "?tab=stats"), (_("Export objects"), None)]) }}
+<header class="hero"><div class="hero-head"><div><h1>{{ _("Export objects") }}</h1>
+  <p class="muted">{{ _("Files found in the capture. They are raw content from the traffic and are not masked, so treat them as sensitive.") }}</p></div></div></header>
+<section class="panel flush">
+  {% if objects %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Protocol") }}</th><th>{{ _("Name") }}</th><th class="num">{{ _("Size") }}</th><th></th></tr></thead>
+    <tbody>{% for o in objects %}<tr><td>{{ o.protocol }}</td><td>{{ o.name }}</td><td class="num">{{ o.size | size }}</td>
+      <td>{% if o.kept %}<a href="/export/{{ a.id }}/object/{{ o.file }}">{{ _("Download") }}</a>{% else %}<span class="hint">{{ _("Not kept: over the 200 MB limit") }}</span>{% endif %}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="empty">{{ _("No files were found in this capture.") }}</p>{% endif %}
+</section>
+{% endblock %}

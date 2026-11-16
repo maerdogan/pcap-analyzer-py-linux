@@ -1,0 +1,37 @@
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% elif services %}
+<section class="panel flush">
+  <h2>{{ _("Service response times") }}</h2>
+  <p class="muted pad">{{ _("Time from each request to its answer, as Wireshark's Service Response Time shows it, for LDAP, Kerberos, SMB2, Kafka, SMTP, DCERPC, MQTT, AMQP and FTP.") }}</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Protocol") }}</th><th>{{ _("Operation") }}</th><th class="num">{{ _("Requests") }}</th><th class="num">{{ _("Answered") }}</th><th class="num">{{ _("Errors") }}</th><th class="num">{{ _("Average") }}</th><th class="num">{{ _("95th pct") }}</th><th class="num">{{ _("Slowest") }}</th></tr></thead>
+    <tbody>{% for s in services %}
+      <tr class="group"><td><b>{{ s.protocol }}</b></td><td>{{ _("All") }}</td><td class="num">{{ s.requests }}</td><td class="num">{{ s.answered }}</td><td class="num">{{ s.errors }}</td><td class="num">{{ s.avg | seconds }}</td><td class="num">{{ s.p95 | seconds }}</td><td class="num">{{ s.max | seconds }}</td></tr>
+      {% for o in s.operations %}<tr><td></td><td>{{ o.op }}</td><td class="num">{{ o.requests }}</td><td class="num">{{ o.answered }}</td><td class="num">{{ o.errors }}</td><td class="num">{{ o.avg | seconds }}</td><td class="num">{{ o.p95 | seconds }}</td><td class="num">{{ o.max | seconds }}</td></tr>{% endfor %}
+    {% endfor %}</tbody>
+  </table></div>
+</section>
+{% set errs = services | selectattr("error_kinds") | list %}
+{% if errs %}
+<section class="panel flush">
+  <h2>{{ _("Service errors") }}</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Protocol") }}</th><th>{{ _("Operation") }}</th><th>{{ _("Answer") }}</th><th class="num">{{ _("Count") }}</th></tr></thead>
+    <tbody>{% for s in errs %}{% for e in s.error_kinds %}<tr><td>{{ s.protocol }}</td><td>{{ e.op }}</td><td>{{ e.error }}</td><td class="num">{{ e.count }}</td></tr>{% endfor %}{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
+<section class="panel flush">
+  <h2>{{ _("Servers") }}</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Protocol") }}</th><th>{{ _("Server") }}</th><th class="num">{{ _("Requests") }}</th><th class="num">{{ _("Errors") }}</th><th class="num">{{ _("Average") }}</th><th class="num">{{ _("Slowest") }}</th></tr></thead>
+    <tbody>{% for s in services %}{% for v in s.servers %}<tr><td>{{ s.protocol }}</td><td>{{ v.server }}</td><td class="num">{{ v.requests }}</td><td class="num">{{ v.errors }}</td><td class="num">{{ v.avg | seconds }}</td><td class="num">{{ v.max | seconds }}</td></tr>{% endfor %}{% endfor %}</tbody>
+  </table></div>
+</section>
+<section class="panel flush">
+  <h2>{{ _("Slowest answers") }}</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Protocol") }}</th><th>{{ _("Operation") }}</th><th class="num">{{ _("Frame") }}</th><th>{{ _("Time") }}</th><th>{{ _("Client") }}</th><th>{{ _("Server") }}</th><th class="num">{{ _("Response time") }}</th><th>{{ _("Answer") }}</th></tr></thead>
+    <tbody>{% for s in services %}{% for r in s.slowest[:5] %}<tr><td>{{ s.protocol }}</td><td>{{ r.op }}</td><td class="num">{{ r.frame }}</td><td>{{ r.start | clock }}</td><td>{{ r.client }}</td><td>{{ r.server }}</td><td class="num">{{ r.time | seconds }}</td><td>{{ r.error or "–" }}</td></tr>{% endfor %}{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}

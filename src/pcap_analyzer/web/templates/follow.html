@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui with context %}
+{% block title %}{{ _("Follow HTTP stream") if f.mode == "http" else _("Follow TCP stream") }}{% endblock %}
+{% block capture_nav %}{{ ui.capnav(a, "connections", issue_count) }}{% endblock %}
+{% block main %}
+{% set http = f.mode == "http" %}
+{{ ui.crumbs([(_("Captures"), "/"), (m.filename, "/a/" ~ a.id), (_("Connection {n}", n=stream), "/a/" ~ a.id ~ "/conn/" ~ stream), (_("Follow HTTP stream") if http else _("Follow TCP stream"), None)]) }}
+<header class="hero"><div class="hero-head"><div><h1>{{ _("Follow HTTP stream") if http else _("Follow TCP stream") }}</h1>
+  <p class="muted">{% if http %}{{ _("Each request and its response in order, with headers and the start of each body. Known secret headers and fields are masked.") }}{% else %}{{ _("What each side sent, in order. The client's bytes are on the left, the server's on the right. Known secret headers and fields are masked.") }}{% endif %}</p></div>
+  <div class="actions"><p class="switch">
+    <a href="?mode=ascii" {% if f.mode == "ascii" %}aria-current="true"{% endif %}>{{ _("Text") }}</a>
+    <a href="?mode=hex" {% if f.mode == "hex" %}aria-current="true"{% endif %}>Hex</a>
+    {% if requests %}<a href="?mode=http" {% if http %}aria-current="true"{% endif %}>HTTP</a>{% endif %}
+  </p></div></div></header>
+{% if http %}
+<section class="panel follow">
+  {% for x in exchanges %}
+  <p class="hint">#{{ loop.index }} · {{ x.start | clock }}{% if x.h2_stream %} · HTTP/2 {{ _("stream") }} {{ x.h2_stream }}{% endif %} · {{ x.total | seconds }}{% if x.truncated %} · {{ _("Truncated") }}{% endif %} · <a href="/a/{{ a.id }}/txn/{{ x.id }}">{{ _("Request details") }}</a></p>
+  <pre class="side-0">{{ x.request }}</pre>
+  {% if x.response %}<pre class="side-1">{{ x.response }}</pre>{% else %}<p class="hint">{{ _("No response was seen.") }}</p>{% endif %}
+  {% else %}<p class="empty">{{ _("No HTTP requests on this connection. Without a key, HTTPS shows only as TLS.") }}</p>{% endfor %}
+  <p class="hint">{{ _("Bodies show their first 2,000 characters, as the analysis keeps them.") }}</p>
+</section>
+{% else %}
+<section class="panel follow">
+  {% for c in f.chunks %}<pre class="side-{{ c.side }}">{{ c.text }}</pre>{% else %}<p class="empty">{{ _("This connection carried no data.") }}</p>{% endfor %}
+  {% if f.chunks and f.chunks[-1].cut %}<p class="hint">{{ _("Only the first 2 MB are shown. Download the connection as PCAP to see all of it.") }}</p>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

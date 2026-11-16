@@ -1,0 +1,209 @@
+{% macro mark() %}
+<img class="mark" src="/static/brand/logo.png" alt="PCAP Analyzer" width="220" height="80">
+{% endmacro %}
+
+{% macro icon(name) %}
+{%- set paths = {
+  "captures": '<path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>',
+  "compare": '<rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="16" rx="1.5"/>',
+  "trend": '<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/>',
+  "guide": '<path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H11v16H5.5A1.5 1.5 0 0 1 4 18.5z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H13v16h5.5a1.5 1.5 0 0 0 1.5-1.5z"/>',
+  "preferences": '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
+  "overview": '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
+  "issues": '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.5v.01"/>',
+  "urls": '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  "connections": '<path d="M4 8h13l-3-3M20 16H7l3 3"/>',
+  "hosts": '<rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="13" width="16" height="7" rx="1.5"/><path d="M8 7.5h.01M8 16.5h.01"/>',
+  "backends": '<ellipse cx="12" cy="6" rx="7" ry="2.5"/><path d="M5 6v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5"/>',
+  "tls": '<rect x="5" y="11" width="14" height="9" rx="1.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  "stats": '<path d="M4 20h16M7 16v-5M12 16V6M17 16v-8"/>',
+  "inspect": '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>',
+  "menu": '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  "logout": '<path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M10 16l-4-4 4-4M6 12h10"/>',
+} -%}
+<svg class="icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">{{ paths[name] | safe }}</svg>
+{%- endmacro %}
+
+{% macro strip(phases) %}
+{% set total = phases | sum(attribute="seconds") %}
+<div class="strip" role="img" aria-label="{% for p in phases %}{{ p.label }} {{ p.seconds | seconds }}{% if not loop.last %}, {% endif %}{% endfor %}">
+  {% for p in phases %}<span class="ph-{{ p.name }}" style="width:{{ (p.seconds / total * 100) | round(2) if total else 0 }}%" title="{{ p.label }}: {{ p.seconds | seconds }}"></span>{% endfor %}
+</div>
+{% endmacro %}
+
+{% macro breakdown(phases) %}
+{% set total = phases | sum(attribute="seconds") %}
+<table class="breakdown">
+  <thead><tr><th>{{ _("Phase") }}</th><th class="num">{{ _("Time") }}</th><th class="num">{{ _("Share") }}</th></tr></thead>
+  <tbody>
+    {% for p in phases | sort(attribute="seconds", reverse=True) %}
+    <tr><td title="{{ p.about }}"><i class="swatch ph-{{ p.name }}"></i>{{ p.label }}</td><td class="num">{{ p.seconds | seconds }}</td><td class="num">{{ _("{n}%", n="%.1f" | format(p.seconds / total * 100) if total else 0) }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}
+
+{% macro rich(line) %}{% for part in line.split("`") %}{% if loop.index0 % 2 %}<code>{{ part }}</code>{% else %}{{ part }}{% endif %}{% endfor %}{% endmacro %}
+
+{% macro guide(g) %}
+{# Short at first sight: one line of meaning, what this capture shows, three checks. The rest opens on demand. #}
+{% set first, rest = g.meaning | lead %}
+<section class="panel guide">
+  <h2>{{ g.headings.title }}</h2>
+  <div class="guide-cols">
+    <div>
+      <h3>{{ g.headings.meaning }}</h3>
+      <p>{{ first }}</p>
+      {% if rest %}<details class="more"><summary>{{ _("More") }}</summary><p>{{ rest }}</p></details>{% endif %}
+    </div>
+    {% if g.evidence %}<div>
+      <h3>{{ g.headings.evidence }}</h3>
+      <ul>{% for line in g.evidence %}<li>{{ rich(line) }}</li>{% endfor %}</ul>
+    </div>{% endif %}
+    <div>
+      <h3>{{ g.headings.checks }}</h3>
+      <ul>{% for line in g.checks[:3] %}<li>{{ rich(line) }}</li>{% endfor %}</ul>
+      {% if g.checks | length > 3 %}<details class="more"><summary>{{ _("{n} more checks", n=g.checks | length - 3) }}</summary><ul>{% for line in g.checks[3:] %}<li>{{ rich(line) }}</li>{% endfor %}</ul></details>{% endif %}
+    </div>
+  </div>
+  <details class="more notes">
+    <summary>{{ g.headings.misread ~ " · " if g.misread }}{{ g.headings.sources }}</summary>
+    {% if g.misread %}<p>{{ rich(g.misread) }}</p>{% endif %}
+    <ul class="sources">{% for s in g.sources %}<li><a href="{{ s.url }}" rel="noreferrer noopener">{{ s.title }}</a>{% if s.where %}: {{ s.where }}{% endif %}</li>{% endfor %}</ul>
+    <p class="hint">{{ g.headings.origin }}</p>
+  </details>
+</section>
+{% endmacro %}
+
+{% macro language_form(request) %}
+<form method="post" action="/language" class="language">
+  <input type="hidden" name="back" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+  <label><span>{{ _("Language") }}</span>
+    <select name="language" data-submit>{% for code, name in languages() %}<option value="{{ code }}" {% if code == lang() %}selected{% endif %}>{{ name }}</option>{% endfor %}</select>
+  </label>
+  <noscript><button>{{ _("Save") }}</button></noscript>
+</form>
+{% endmacro %}
+
+{% macro quality(q) %}
+{% if q %}
+<section class="panel trust trust-{{ q.level }}">
+  <h2>{{ _("Capture trust: {level}", level=q.label) }}</h2>
+  {% if q.findings %}<ul>{% for f in q.findings %}<li>{{ f.text }}</li>{% endfor %}</ul>
+  {% else %}<p>{{ _("No problems were found in the capture itself.") }}</p>{% endif %}
+</section>
+{% endif %}
+{% endmacro %}
+
+{% macro status(code) %}
+{% if code %}<span class="status s{{ code // 100 }}">{{ code }}</span>{% else %}<span class="status s0" title="{{ _("No response") }}" aria-label="{{ _("No response") }}">–</span>{% endif %}
+{% endmacro %}
+
+{% macro waterfall(rows, a, link=True) %}
+{% set longest = rows | map(attribute="longest") | max if rows else 0 %}
+<ol class="waterfall">
+  {% for t in rows %}
+  <li>
+    {{ status(t.status) }}
+    <div class="wf-main">
+      {% if link %}<a class="wf-url" href="/a/{{ a.id }}/txn/{{ t.id }}">{{ t.method }} {{ t.uri | truncate(90, True, "…") }}</a>
+      {% else %}<span class="wf-url">{{ t.method }} {{ t.uri | truncate(90, True, "…") }}</span>{% endif %}
+      <p class="why"><b>{{ t.cause_label }}.</b> {{ t.explanation }}</p>
+    </div>
+    <div class="wf-bar"><div class="bar-fill" style="width:{{ ((t.longest / longest * 100) if longest else 0) | round(1) }}%">{{ strip(t.phases) }}</div></div>
+    <span class="took">{{ t.longest | seconds }}</span>
+  </li>
+  {% endfor %}
+</ol>
+{% endmacro %}
+
+{% macro stats(s, scored=False) %}
+<dl class="metrics">
+  <div><dt>{{ _("Requests") }}</dt><dd>{{ s.requests or 0 }}</dd></div>
+  {% if not scored %}
+  <div><dt>{{ _("Successful") }}</dt><dd>{{ s.ok or 0 }}</dd></div>
+  <div {% if s.failed %}class="alert"{% endif %}><dt>{{ _("Failed") }}</dt><dd>{{ s.failed or 0 }}</dd></div>
+  {% endif %}
+  <div><dt>{{ _("Average") }}</dt><dd>{{ s.avg_total | seconds }}</dd></div>
+  <div><dt>{{ _("Median") }}</dt><dd>{{ s.p50_total | seconds }}</dd></div>
+  <div><dt>{{ _("95th percentile") }}</dt><dd>{{ s.p95_total | seconds }}</dd></div>
+  <div><dt>{{ _("Slowest") }}</dt><dd>{{ s.max_total | seconds }}</dd></div>
+</dl>
+{% endmacro %}
+
+{% macro score(s) %}
+<div class="score">
+  <div class="score-side"><b class="good">{{ _("Successful") }}</b></div>
+  <div class="score-mid">
+    <strong><span class="good">{{ s.ok or 0 }}</span><i>–</i><span {% if s.failed %}class="bad"{% endif %}>{{ s.failed or 0 }}</span></strong>
+    <small>{{ _("95th percentile") }}: {{ s.p95_total | seconds }}</small>
+  </div>
+  <div class="score-side"><b {% if s.failed %}class="bad"{% endif %}>{{ _("Failed") }}</b></div>
+</div>
+{% endmacro %}
+
+{% macro crumbs(steps) %}
+<nav class="crumbs" aria-label="{{ _("Location") }}"><ol>
+  {% for label, href in steps %}<li>{% if href %}<a href="{{ href }}">{{ label }}</a>{% else %}{{ label }}{% endif %}</li>{% endfor %}
+</ol></nav>
+{% endmacro %}
+
+{% macro duel(rows) %}
+<ul class="duel">
+  {% for r in rows %}
+  {% set is_time = r.is_time is not defined or r.is_time %}
+  {% set top = [r.a or 0, r.b or 0] | max %}
+  <li>
+    <div class="duel-row">
+      <b>{% if is_time %}{{ r.a | seconds }}{% else %}{{ r.a if r.a is not none else "–" }}{% endif %}</b>
+      <span class="duel-name">{{ r.label }}
+        <small class="{{ 'up' if r.delta and r.delta > 0 else 'down' if r.delta and r.delta < 0 else '' }}">{% if r.delta is none %}–{% elif is_time %}{{ "+" if r.delta > 0 else "" }}{{ (r.delta * 1000) | round(1) }} ms{% else %}{{ "+" if r.delta > 0 else "" }}{{ r.delta }}{% endif %}{% if r.percent is defined and r.percent is not none %} ({{ "%+.0f%%" | format(r.percent) }}){% endif %}</small>
+      </span>
+      <b>{% if is_time %}{{ r.b | seconds }}{% else %}{{ r.b if r.b is not none else "–" }}{% endif %}</b>
+    </div>
+    <div class="duel-bars" aria-hidden="true">
+      <div><span style="width:{{ (((r.a or 0) / top * 100) if top else 0) | round(1) }}%"></span></div>
+      <div><span style="width:{{ (((r.b or 0) / top * 100) if top else 0) | round(1) }}%"></span></div>
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+{% endmacro %}
+
+{% macro capnav(a, current, issue_count=0) %}
+<nav class="side-group views" aria-label="{{ _("Capture views") }}">
+  <p class="side-label" aria-hidden="true">{{ _("Capture views") }}</p>
+  {% for key, href, label in [
+    ("overview", "", _("Overview")), ("issues", "?tab=issues", _("Issues")), ("urls", "?tab=urls", _("URLs")),
+    ("connections", "?tab=connections", _("Connections")), ("hosts", "?tab=hosts", _("Hosts")), ("backends", "?tab=backends", _("Servers")),
+    ("tls", "?tab=tls", "TLS"), ("stats", "?tab=stats", _("Statistics")), ("inspect", "/inspect", _("Inspect traffic"))] %}
+  <a href="/a/{{ a.id }}{{ href }}" {% if current == key %}aria-current="page"{% endif %}>{{ icon(key) }}<span>{{ label }}</span>{% if key == "issues" and issue_count %}<span class="count">{{ issue_count }}</span>{% endif %}</a>
+  {% endfor %}
+</nav>
+{% endmacro %}
+
+{% macro capsearch(a) %}
+<form class="search" method="get" action="/a/{{ a.id }}/inspect" role="search">
+  {{ icon("inspect") }}
+  <input type="search" name="url" aria-label="{{ _("Search URLs in this capture") }}" placeholder="{{ _("Search URLs in this capture") }}">
+</form>
+{% endmacro %}
+
+{% macro flow(f) %}
+{% set w = 170 %}{% set left = 120 %}{% set row = 26 %}
+{% set width = left + w * f.hosts | length %}
+<div class="flow-wrap"><svg class="flow" viewBox="0 0 {{ width + 40 }} {{ 40 + row * f.rows | length }}" width="{{ width + 40 }}" role="img" aria-label="{{ _("Flow graph") }}">
+  {% for h in f.hosts %}{% set x = left + w * loop.index0 + w / 2 %}
+  <text x="{{ x }}" y="16" text-anchor="middle" class="host">{{ h }}</text>
+  <line x1="{{ x }}" y1="24" x2="{{ x }}" y2="{{ 32 + row * f.rows | length }}" class="life"/>
+  {% endfor %}
+  {% for r in f.rows %}{% set y = 40 + row * loop.index0 %}
+  {% set x1 = left + w * f.hosts.index(r.src) + w / 2 %}{% set x2 = left + w * f.hosts.index(r.dst) + w / 2 %}
+  <text x="4" y="{{ y + 4 }}" class="time">{{ "%.6f" | format(r.t) }}</text>
+  <line x1="{{ x1 }}" y1="{{ y }}" x2="{{ x2 }}" y2="{{ y }}" class="msg" marker-end="url(#arrow)"/>
+  <text x="{{ (x1 + x2) / 2 }}" y="{{ y - 4 }}" text-anchor="middle" class="info"><title>{{ r.frame }}: {{ r.protocol }} {{ r.info }}</title>{{ (r.protocol ~ " " ~ r.info) | truncate(44, True, "…") }}</text>
+  {% endfor %}
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker></defs>
+</svg></div>
+{% if f.cut %}<p class="hint">{{ _("Only the first {n} packets are shown. Narrow the filter to see others.", n=f.rows | length) }}</p>{% endif %}
+{% endmacro %}

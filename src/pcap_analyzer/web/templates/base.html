@@ -1,0 +1,62 @@
+{% import "_macros.html" as ui with context %}
+<!doctype html>
+<html lang="{{ lang() }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}'>
+  <title>{% block title %}pcap-analyzer{% endblock %}</title>
+  <link rel="icon" href="/static/brand/favicon.png" type="image/png">
+  <link rel="stylesheet" href="/static/vendor/ag-grid.min.css">
+  <link rel="stylesheet" href="/static/vendor/ag-theme-quartz.min.css">
+  <link rel="stylesheet" href="/static/app.css?v={{ version }}">
+  <script src="/static/vendor/htmx.min.js" defer></script>
+  <script src="/static/vendor/ag-grid.min.js" defer></script>
+  <script src="/static/vendor/echarts.min.js" defer></script>
+  <script src="/static/app.js?v={{ version }}" defer></script>
+</head>
+<body class="app" data-words='{{ js_words() | tojson }}' hx-headers='{"X-CSRF-Token": "{{ form_token() }}"}'>
+  <a class="skip" href="#main">{{ _("Skip to content") }}</a>
+  {% set capture_views = self.capture_nav() %}
+  {% set recent = recent_captures() %}
+  <aside class="side" id="side">
+    <a class="side-brand" href="/" aria-label="pcap-analyzer">
+      <img src="/static/brand/logo-on-dark.png" alt="" width="176" height="64">
+    </a>
+    <div class="side-scroll">
+      <nav class="side-group" aria-label="{{ _("Main") }}">
+        <p class="side-label" aria-hidden="true">{{ _("Main") }}</p>
+        <a href="/" {% if section == "captures" %}aria-current="page"{% endif %}>{{ ui.icon("captures") }}<span>{{ _("Captures") }}</span></a>
+        <a href="/compare" {% if section == "compare" %}aria-current="page"{% endif %}>{{ ui.icon("compare") }}<span>{{ _("Compare") }}</span></a>
+        <a href="/trend" {% if section == "trend" %}aria-current="page"{% endif %}>{{ ui.icon("trend") }}<span>{{ _("Trend") }}</span></a>
+        <a href="/capture-guide" {% if section == "guide" %}aria-current="page"{% endif %}>{{ ui.icon("guide") }}<span>{{ _("Capture guide") }}</span></a>
+        <a href="/preferences" {% if section == "preferences" %}aria-current="page"{% endif %}>{{ ui.icon("preferences") }}<span>{{ _("Preferences") }}</span></a>
+      </nav>
+      {% block capture_nav %}{% endblock %}
+      {% if recent %}
+      <nav class="ticker" aria-label="{{ _("Recent captures") }}">
+        <p class="side-label ticker-name" aria-hidden="true">{{ _("Recent captures") }}</p>
+        <ol>
+          {% for r in recent %}
+          <li><a href="/a/{{ r.id }}" title="{{ r.filename }}" {% if a and a.id == r.id %}aria-current="true"{% endif %}><b>{{ r.filename }}</b><span><time>{{ r.created | clock }}</time> · {{ _("{n} requests", n=r.transactions) }}</span></a></li>
+          {% endfor %}
+        </ol>
+      </nav>
+      {% endif %}
+    </div>
+    <p class="side-foot">{{ _("Version {n}", n=version) }}</p>
+  </aside>
+  <div class="scrim" data-nav-close hidden></div>
+  <div class="shell">
+    <header class="top">
+      <button type="button" class="icon-button nav-toggle" aria-controls="side" aria-expanded="false" data-nav-toggle>{{ ui.icon("menu") }}<span class="sr">{{ _("Menu") }}</span></button>
+      {% if capture_views | trim and a %}{{ ui.capsearch(a) }}{% endif %}
+      <div class="top-end">
+        {{ ui.language_form(request) }}
+        <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ form_token() }}"><button class="ghost">{{ ui.icon("logout") }}<span>{{ _("Sign out") }}</span></button></form>
+      </div>
+    </header>
+    <main class="page" id="main">{% block main %}{% endblock %}</main>
+  </div>
+</body>
+</html>

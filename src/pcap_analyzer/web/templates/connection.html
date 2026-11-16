@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui with context %}
+{% block title %}{{ _("Connection {n}", n=d.conn.stream) }}{% endblock %}
+{% block capture_nav %}{{ ui.capnav(a, "connections", issue_count) }}{% endblock %}
+{% block main %}
+{% set c = d.conn %}
+{{ ui.crumbs([(_("Captures"), "/"), (m.filename, "/a/" ~ a.id), (_("Connections"), "/a/" ~ a.id ~ "?tab=connections"), (c.client_ip ~ ":" ~ c.client_port, None)]) }}
+<header class="hero">
+  <div class="hero-head">
+  <div>
+    <h1>{{ _("Connection {n}", n=c.stream) }}</h1>
+    <p class="muted">{{ _("{kind}, {n} requests, open for {time}.", kind=c.kind, n=d.total, time=c.duration | seconds) }}
+    {% if c.close_type %}{{ _("Closed by the client with {how}.", how=c.close_type) if c.closed_by == "client" else _("Closed by the server with {how}.", how=c.close_type) }}{% else %}{{ _("Still open when the capture ended.") }}{% endif %}</p>
+  </div>
+  {% if m.capture_kept %}<div class="actions">
+    <a class="button" href="/a/{{ a.id }}/conn/{{ c.stream }}/follow">{{ _("Follow TCP stream") }}</a>
+    {% if d.total %}<a class="button" href="/a/{{ a.id }}/conn/{{ c.stream }}/follow?mode=http">{{ _("Follow HTTP stream") }}</a>{% endif %}
+    <a class="button" href="/a/{{ a.id }}/flow?stream={{ c.stream }}">{{ _("Flow graph") }}</a>
+    <a class="button" href="/export/{{ a.id }}/conn/{{ c.stream }}.pcapng">{{ _("Download this connection as PCAP") }}</a></div>{% endif %}
+  </div>
+  <div class="score ends">
+    <div class="score-side"><small>{{ _("Client") }}</small><b>{{ c.client_ip }}:{{ c.client_port }}</b></div>
+    <div class="score-mid"><strong>{{ d.total }}</strong><small>{{ _("Requests") }}</small></div>
+    <div class="score-side"><small>{{ _("Server") }}</small><b>{{ c.server_ip }}:{{ c.server_port }}</b></div>
+  </div>
+</header>
+{% if d.top %}
+<section class="panel flush">
+  <div class="section-head">
+    <h2>{{ _("Slowest requests") }}</h2>
+    <p class="switch">
+      <a href="?percent=false" {% if not percent %}aria-current="true"{% endif %}>{{ _("First 5") }}</a>
+      <a href="?percent=true" {% if percent %}aria-current="true"{% endif %}>{{ _("Top 10%") }}</a>
+    </p>
+  </div>
+  {{ ui.waterfall(d.top, a) }}
+</section>
+{% endif %}
+{% if d.total %}
+<section class="panel">
+  <h2>{{ _("Requests on a time axis") }}</h2>
+  <div class="chart" data-chart="waterfall" data-src="/api/a/{{ a.id }}/waterfall/{{ c.stream }}" data-name="connection-{{ c.stream }}"></div>
+</section>
+{% endif %}
+{% if m.capture_kept %}
+<section class="panel flush">
+  <h2>{{ _("All packets") }}</h2>
+  <p class="muted pad">{{ _("Every packet of this connection in order, as Wireshark's packet list shows it.") }}</p>
+  <div id="conn-packets" hx-get="/a/{{ a.id }}/conn/{{ c.stream }}/packets" hx-trigger="load" hx-swap="innerHTML"><p class="empty">{{ _("Reading the packets again. A large capture can take a few minutes the first time.") }}</p></div>
+</section>
+<section class="panel">
+  <div class="section-head">
+    <h2>{{ _("TCP graphs") }}</h2>
+    <p class="switch" data-graph-switch>
+      <a href="#" data-kind="stevens" aria-current="true">{{ _("Stevens") }}</a>
+      <a href="#" data-kind="throughput">{{ _("Throughput") }}</a>
+      <a href="#" data-kind="rtt">{{ _("Round trip") }}</a>
+      <a href="#" data-kind="window">{{ _("Window") }}</a>
+    </p>
+  </div>
+  <div class="chart tall" data-chart="tcpgraph" data-kind="stevens" data-src="/api/a/{{ a.id }}/tcpgraph/{{ c.stream }}" data-name="connection-{{ c.stream }}-graph"></div>
+  <p class="hint">{{ _("Stevens: sequence numbers over time, resent segments in red. Throughput: bits per second each side sent. Round trip: the time until each segment was acknowledged. Window: the receive window each side offered.") }}</p>
+</section>
+{% endif %}
+<section class="panel">
+  <h2>{{ _("TCP details") }}</h2>
+  <dl class="facts">
+    <div><dt>{{ _("Connect time") }}</dt><dd>{{ c.connect_time | seconds }}</dd></div>
+    <div><dt>{{ _("Round trip to server") }}</dt><dd>{{ c.rtt_server | seconds }}</dd></div>
+    <div><dt>{{ _("Round trip to client") }}</dt><dd>{{ c.rtt_client | seconds }}</dd></div>
+    <div><dt>{{ _("Capture point") }}</dt><dd>{{ _(c.capture_point | replace("_", " ") | capitalize) }}</dd></div>
+    <div><dt>MSS</dt><dd>{{ c.mss or "–" }}</dd></div>
+    <div><dt>SACK</dt><dd>{{ _("Yes") if c.sack else _("No") }}</dd></div>
+    <div><dt>{{ _("Window scale") }}</dt><dd>{{ c.wscale if c.wscale is not none else "–" }}</dd></div>
+    <div><dt>{{ _("Smallest window") }}</dt><dd>{{ c.min_window if c.min_window is not none else "–" }}</dd></div>
+    <div><dt>{{ _("Retransmissions") }}</dt><dd>{{ c.retransmissions }}</dd></div>
+    <div><dt>{{ _("Zero windows") }}</dt><dd>{{ c.zero_windows }}</dd></div>
+    <div><dt>{{ _("Client sent") }}</dt><dd>{{ c.payload_client | size }}</dd></div>
+    <div><dt>{{ _("Server sent") }}</dt><dd>{{ c.payload_server | size }}</dd></div>
+    <div><dt>{{ _("Byte ratio") }}</dt><dd>{{ c.byte_ratio_db }} dB</dd></div>
+    {% if c.tls_version %}<div><dt>TLS</dt><dd>{{ c.tls_version }}</dd></div>{% endif %}
+    {% if c.sni %}<div><dt>{{ _("Server name") }}</dt><dd>{{ c.sni }}</dd></div>{% endif %}
+  </dl>
+</section>
+{% endblock %}

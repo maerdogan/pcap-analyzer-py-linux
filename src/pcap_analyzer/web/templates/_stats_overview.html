@@ -1,0 +1,47 @@
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% else %}
+<section class="panel flush">
+  <h2>{{ _("Protocol hierarchy") }}</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Protocol") }}</th><th class="num">{{ _("Packets") }}</th><th class="num">%</th><th class="num">{{ _("Bytes") }}</th><th class="num">%</th></tr></thead>
+    <tbody>{% for p in o.hierarchy %}<tr><td style="padding-left: {{ 12 + p.depth * 16 }}px">{{ p.protocol }}</td><td class="num">{{ p.packets }}</td><td class="num">{{ "%.1f" | format(p.share * 100) }}</td><td class="num">{{ p.bytes | size }}</td><td class="num">{{ "%.1f" | format(p.byte_share * 100) }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+<section class="panel flush">
+  <h2>{{ _("Packet lengths") }}</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Bytes per packet") }}</th><th class="num">{{ _("Packets") }}</th><th class="num">%</th><th class="num">{{ _("Bytes") }}</th></tr></thead>
+    <tbody>{% for s in o.sizes %}<tr><td>{{ s.bin }}</td><td class="num">{{ s.packets }}</td><td class="num">{{ "%.1f" | format(s.packets / o.packets * 100 if o.packets else 0) }}</td><td class="num">{{ s.bytes | size }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+<section class="panel flush">
+  <h2>{{ _("UDP conversations") }}</h2>
+  {% if o.udp %}<div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Address A") }}</th><th>{{ _("Address B") }}</th><th class="num">{{ _("Packets") }}</th><th class="num">{{ _("Bytes") }}</th><th class="num">A → B</th><th class="num">B → A</th><th class="num">{{ _("Duration") }}</th></tr></thead>
+    <tbody>{% for c in o.udp %}<tr><td>{{ c.a }}</td><td>{{ c.b }}</td><td class="num">{{ c.frames }}</td><td class="num">{{ c.bytes | size }}</td><td class="num">{{ c.a_to_b | size }}</td><td class="num">{{ c.b_to_a | size }}</td><td class="num">{{ c.duration | seconds }}</td></tr>{% endfor %}</tbody>
+  </table></div>{% else %}<p class="empty">{{ _("No UDP traffic in this capture.") }}</p>{% endif %}
+</section>
+<section class="panel flush">
+  <h2>{{ _("Ethernet conversations") }}</h2>
+  {% if o.ethernet %}<div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Address A") }}</th><th>{{ _("Address B") }}</th><th class="num">{{ _("Packets") }}</th><th class="num">{{ _("Bytes") }}</th><th class="num">{{ _("Duration") }}</th></tr></thead>
+    <tbody>{% for c in o.ethernet %}<tr><td>{{ c.a }}</td><td>{{ c.b }}</td><td class="num">{{ c.frames }}</td><td class="num">{{ c.bytes | size }}</td><td class="num">{{ c.duration | seconds }}</td></tr>{% endfor %}</tbody>
+  </table></div>{% else %}<p class="empty">{{ _("This capture has no Ethernet headers, such as one taken with tcpdump -i any.") }}</p>{% endif %}
+</section>
+{% if o.macs %}
+<section class="panel flush">
+  <h2>{{ _("MAC endpoints") }}</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Address") }}</th><th class="num">{{ _("Packets") }}</th><th class="num">{{ _("Bytes") }}</th><th class="num">{{ _("Sent") }}</th><th class="num">{{ _("Received") }}</th></tr></thead>
+    <tbody>{% for e in o.macs %}<tr><td>{{ e.address }}</td><td class="num">{{ e.frames }}</td><td class="num">{{ e.bytes | size }}</td><td class="num">{{ e.sent | size }}</td><td class="num">{{ e.received | size }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
+<section class="panel flush">
+  <h2>{{ _("IP endpoints") }}</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Address") }}</th>{% if o.geoip %}<th>{{ _("Country") }}</th><th>{{ _("AS number") }}</th>{% endif %}<th class="num">{{ _("Packets") }}</th><th class="num">{{ _("Bytes") }}</th><th class="num">{{ _("Sent") }}</th><th class="num">{{ _("Received") }}</th></tr></thead>
+    <tbody>{% for e in o.ips %}<tr><td>{{ e.address }}</td>{% if o.geoip %}<td>{{ e.country or "–" }}</td><td>{{ e.asn or "–" }}</td>{% endif %}<td class="num">{{ e.frames }}</td><td class="num">{{ e.bytes | size }}</td><td class="num">{{ e.sent | size }}</td><td class="num">{{ e.received | size }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% if not o.geoip %}<p class="hint pad">{{ _("Set PCAP_ANALYZER_GEOIP_DIR to a folder of MaxMind GeoLite2 files to see the country and network of each address.") }}</p>{% endif %}
+</section>
+{% endif %}

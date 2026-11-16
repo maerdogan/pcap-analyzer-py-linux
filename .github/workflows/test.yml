@@ -1,0 +1,54 @@
+name: Test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.13"
+      - run: sudo apt-get update && sudo apt-get install -y tshark
+      - run: pip install -e ".[dev]"
+      - run: python tools/build_knowledge.py --check
+      - run: pytest
+
+  audit:
+    runs-on: ubuntu-latest
+    continue-on-error: true # warns in the run summary and does not block a merge
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: pipx run pip-audit==2.9.0 --no-deps --disable-pip -r requirements.lock
+
+  install:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check:
+          - local
+          - image python:3.6-slim system
+          - image ubuntu:18.04
+          - image rockylinux:8
+          - image opensuse/leap:15.0
+          - image centos:7
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install -y tshark
+      - run: tools/check_install.sh $CHECK
+        env:
+          CHECK: ${{ matrix.check }}

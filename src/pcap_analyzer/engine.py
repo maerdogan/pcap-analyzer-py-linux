@@ -1,0 +1,467 @@
+"""Analyze a capture once and keep the result; the same input reopens the saved result."""
+import gzip
+import hashlib
+import json
+import re
+import shutil
+import tempfile
+import time
+from dataclasses import astuple, dataclass
+from pathlib import Path
+
+from . import __version__, knowledge, records, split, store, tshark
+from .config import Settings
+from .parser import Builder, finish_stream, nat_views
+
+
+DNS_WINDOW_S = 5.0
+DNS_LOOKUP_S = 60.0  # one lookup can try several search domains, each with resolver timeouts
+GZIP_MAGIC = b"\x1f\x8b"
+COMPRESSED_MAGIC = (b"\x28\xb5\x2f\xfd", b"\x04\x22\x4d\x18")  # zstd, lz4
+ARCHIVES = {b"PK\x03\x04": "ZIP", b"7z\xbc\xaf": "7-Zip", b"Rar!": "RAR", b"BZh": "bzip2", b"\xfd7zXZ": "xz"}
+KEYLOG_LABELS = (b"CLIENT_RANDOM ", b"CLIENT_HANDSHAKE_TRAFFIC_SECRET ", b"SERVER_HANDSHAKE_TRAFFIC_SECRET ", b"CLIENT_TRAFFIC_SECRET_0 ", b"RSA ")
+HEAD_BYTES = 4096
+CHUNK = 1 << 20
+STALE_TMP_S = 6 * 3600
+TMP_PREFIXES = ("pcap-analyzer-", "pcap-upload-", "pcap-export-")
+PART_BYTES = 100 * CHUNK  # a larger capture is read in parts, and one part takes about as much memory as a capture this size
+STREAM_FIELDS = re.compile(r"\b(frame\.number|tcp\.stream)\b")
+KEYLOG_CUT_BYTES = 8 * CHUNK  # a larger key log, like NetScaler's for every session it served, is cut to the sessions in the capture
+CLIENT_HELLO = re.compile(rb"\x16\x03[\x00-\x04]..\x01...\x03[\x00-\x04](.{32})", re.S)  # TLS record, ClientHello, version, random
+HELLO_BYTES = 43
+
+
+class CaptureTooLarge(Exception):
+    pass
+
+
+class NotFound(Exception):
+    pass
+
+
+class CompressedCapture(ValueError):
+    pass
+
+
+class WrongFile(ValueError):
+    """A file that is not what its field asks for, such as an archive in the capture field."""
+
+
+@dataclass
+class Analysis:
+    id: str
+    dir: Path
+    meta: dict
+    cached: bool
+
+    @property
+    def db_path(self):
+        return self.dir / "analysis.duckdb"
+
+    def connect(self):
+        return store.connect(self.db_path)
+
+
+def _refuse_compressed(path):
+    """tshark would unpack these, and the unpacked size cannot be known or limited beforehand.
+    Other files people pick by mistake get a message that names them, rather than tshark's guess at an unknown format."""
+    with open(path, "rb") as f:
+        head = f.read(HEAD_BYTES)
+    if head.startswith(COMPRESSED_MAGIC):
+        raise CompressedCapture(knowledge.t("Compressed captures are not accepted, because their real size cannot be checked. Decompress the file and upload it again."))
+    kind = next((name for magic, name in ARCHIVES.items() if head.startswith(magic)), "tar" if head[257:262] == b"ustar" else None)
+    if kind:
+        raise WrongFile(knowledge.t("This is a {kind} archive, not a capture. Extract the capture from it and upload that file.", kind=kind))
+    if b"\0" in head or not _is_text(head):
+        return
+    if any(label in head for label in KEYLOG_LABELS):
+        raise WrongFile(knowledge.t("This is a TLS key log, not a capture. Choose it in the key log field and the capture in the capture field."))
+    if b"-----BEGIN " in head:
+        raise WrongFile(knowledge.t("This is a key or certificate file, not a capture."))
+    raise WrongFile(knowledge.t("This is a text file, not a capture."))
+
+
+def _is_text(head):
+    try:
+        head.decode("utf-8")
+    except UnicodeDecodeError as e:
+        return e.start >= len(head) - 4  # a character cut at the end of the sample
+    return True
+
+
+def check_keylog(path):
+    """tshark skips lines it cannot read, so a wrong file would decrypt nothing without a word."""
+    with open(path, "rb") as f:
+        head = f.read(HEAD_BYTES)
+    if b"\0" in head or not _is_text(head):
+        raise WrongFile(knowledge.t("This is not a TLS key log. A key log is a text file with lines such as CLIENT_RANDOM."))
+
+
+def check_rsa_key(path):
+    """tshark takes a PEM private key here. A .pfx needs its password, and without a key it silently decrypts nothing."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if b"-----BEGIN" not in data:
+        raise WrongFile(knowledge.t("The RSA key must be a PEM file. Convert a .pfx or .p12 file with: openssl pkcs12 -in FILE.pfx -nocerts -nodes -out key.pem"))
+    if b"PRIVATE KEY-----" not in data:
+        raise WrongFile(knowledge.t("This PEM file holds no private key."))
+
+
+def unpack(path, folder, settings):
+    """Unpack a gzip capture and stop at the size limit, because the real size is unknown until then."""
+    with open(path, "rb") as f:
+        if f.read(2) != GZIP_MAGIC:
+            return Path(path)
+    limit, written = settings.max_size_mb * CHUNK, 0
+    fd, name = tempfile.mkstemp(prefix="unpacked-", dir=folder)
+    try:
+        with gzip.open(path, "rb") as src, open(fd, "wb") as dst:
+            while chunk := src.read(CHUNK):
+                written += len(chunk)
+                if written > limit:
+                    raise CaptureTooLarge(knowledge.t("{name} is larger than the {n} MB limit", name=Path(path).name, n=settings.max_size_mb))
+                dst.write(chunk)
+    except (OSError, EOFError) as e:
+        raise CompressedCapture(knowledge.t("This gzip file is damaged: {reason}", reason=e)) from e
+    return Path(name)
+
+
+def join_parts(paths, folder, settings):
+    """Turn several parts into one capture, unpacking each first and holding the size limit on the result."""
+    parts = [unpack(p, folder, settings) for p in paths]
+    for p in parts:
+        _refuse_compressed(p)
+    if sum(p.stat().st_size for p in parts) > settings.max_size_mb * CHUNK:
+        raise CaptureTooLarge(knowledge.t("{name} is larger than the {n} MB limit", name=Path(paths[0]).name, n=settings.max_size_mb))
+    if len(parts) == 1:
+        return parts[0]
+    out = Path(folder) / "merged.pcapng"
+    tshark.merge(parts, out, settings.mergecap, settings.tshark)
+    return out
+
+
+def _digest(paths, flt, slow_s):
+    h = hashlib.sha256()
+    h.update(__version__.encode())
+    for p in paths:
+        h.update(b"\0")
+        if p:
+            with open(p, "rb") as f:
+                while chunk := f.read(1 << 20):
+                    h.update(chunk)
+    h.update(repr((astuple(flt), slow_s)).encode())
+    return h.hexdigest()[:20]
+
+
+def _facts(db):
+    """What the warnings and the quality report need from the saved connections and requests."""
+    c = db.execute("""SELECT count(*), count(*) FILTER (NOT syn_seen), count(*) FILTER (close_type IS NULL),
+        count(*) FILTER ((payload_client = 0 AND payload_server = 0) OR one_way), count(*) FILTER (kind = 'TLS'),
+        coalesce(bool_or(offload), false), coalesce(bool_or(kind = 'TLS' AND handshake_seen AND tls_unread), false), coalesce(bool_or(kind = 'TLS' AND NOT syn_seen), false)
+        FROM tcp_connections""").fetchone()
+    events = dict(db.execute("SELECT event, count(*) FROM tcp_events WHERE event IN ('ack_lost_segment', 'lost_segment') GROUP BY event").fetchall())
+    shared = db.execute("""SELECT 1 FROM http_transactions WHERE request_id IS NOT NULL AND request_id <> ''
+        GROUP BY request_id HAVING count(DISTINCT stream) > 1 LIMIT 1""").fetchone()
+    return dict(connections=c[0], started_before=c[1], open_at_end=c[2], one_way=c[3], encrypted=c[4], offload=c[5],
+                tls_handshake_seen=c[6], tls_started_before=c[7], unseen=events.get("ack_lost_segment", 0), gaps=events.get("lost_segment", 0),
+                shared_request_id=bool(shared), transactions=db.execute("SELECT count(*) FROM http_transactions").fetchone()[0])
+
+
+def _warnings(b, facts, keyed, warnings):
+    if b.truncated:
+        warnings.append("frames_truncated")
+    if b.copies:
+        warnings.append("copies_removed")
+    if b.nat_views:
+        warnings.append("nat_views_removed")
+    if facts["shared_request_id"]:
+        warnings.append("same_request_on_two_connections")
+    if b.tunnelled:
+        warnings.append("tunnel_seen")
+    if facts["offload"]:
+        warnings.append("offload_suspected")
+    if not keyed and facts["encrypted"]:
+        warnings.append("tls_not_decrypted")
+    if keyed and facts["tls_handshake_seen"]:
+        warnings.append("tls_key_did_not_decrypt")
+    if keyed and facts["tls_started_before"]:
+        warnings.append("tls_started_before_capture")  # its keys cannot be matched without the handshake
+    return sorted(set(warnings))
+
+
+def _attach_dns(txns, dns, asks):
+    """Link a lookup to a new connection when its answer came shortly before that connection.
+
+    The time runs from the first query of the lookup, so search domains tried before the answer and
+    queries sent again after a timeout count too. A short name such as web.shop is looked up as
+    web.shop.<search domain>, so those names belong to the host as well."""
+    answers, sent, names_of = {}, {}, {}
+    for name, duration, _, t in dns:
+        if name:
+            answers.setdefault(name.lower(), []).append((t, duration))
+    for name, t in asks:
+        if name:
+            sent.setdefault(name.lower(), []).append(t)
+    for x in txns:
+        host = (x.get("host") or "").split(":")[0].lower().rstrip(".")
+        if x.get("connect_time") is None or not host:
+            continue
+        if host not in names_of:
+            names_of[host] = [n for n in answers.keys() | sent.keys() if n == host or n.startswith(host + ".")]
+        names = names_of[host]
+        near = [(t, d, n) for n in names for t, d in answers.get(n, ()) if 0 <= x["req_start"] - t <= DNS_WINDOW_S]
+        if not near:
+            continue
+        end, duration, final = max(near)
+        asked = end - duration
+        since = max((t for t, _ in answers[final] if t < asked), default=asked - DNS_LOOKUP_S)  # the lookup before ended there
+        start = min((t for n in names for t in sent.get(n, ()) if since < t <= asked), default=asked)
+        x["dns_time"] = end - start
+
+
+def _attach_packet_size(b, txns):
+    for x in txns:
+        s = b.streams[x["stream"]]
+        hi = x["last_frame"] or x["req_frame"]
+        x["max_packet"] = max((p.size for p in s.packets if x["req_frame"] <= p.frame <= hi), default=0)
+
+
+def _quality(b, facts):
+    """Counts that show how far this capture can be trusted. Levels and wording come later, from the reports."""
+    return dict(tcp_packets=b.tcp, connections=facts["connections"], unseen=facts["unseen"], gaps=facts["gaps"], snapped=b.truncated, copies=b.copies,
+                started_before=facts["started_before"], open_at_end=facts["open_at_end"], one_way=facts["one_way"], encrypted=facts["encrypted"])
+
+
+def analyze(path, keylog=None, rsa_key=None, flt=None, settings=None, use_cached=True, display_name=None, limit=None):
+    settings = settings or Settings()
+    own_limit = limit is None
+    limit = limit or tshark.Limit(settings.analysis_timeout_s)
+    try:
+        return _analyze(path, keylog, rsa_key, flt, settings, use_cached, display_name, limit)
+    finally:
+        if own_limit:
+            limit.close()
+
+
+def _analyze(path, keylog, rsa_key, flt, settings, use_cached, display_name, limit):
+    flt = flt or tshark.Filter()
+    path = Path(path)
+    if path.stat().st_size > settings.max_size_mb * CHUNK:
+        raise CaptureTooLarge(knowledge.t("{name} is larger than the {n} MB limit", name=path.name, n=settings.max_size_mb))
+    if keylog:
+        check_keylog(keylog)
+    if rsa_key:
+        check_rsa_key(rsa_key)
+    with tempfile.TemporaryDirectory(prefix="pcap-analyzer-", dir="/tmp") as folder:
+        capture = join_parts([path], folder, settings)
+        display_name = display_name or path.name.removesuffix(".gz")
+        return _run(capture, keylog, rsa_key, flt, settings, use_cached, display_name, limit)
+
+
+def _run(path, keylog, rsa_key, flt, settings, use_cached, display_name, limit):
+    ts_version = tshark.version(settings.tshark)
+    slow_s = records.slow_s(settings)
+    aid = _digest([path, keylog, rsa_key], flt, slow_s)
+    out = settings.workdir / aid
+    if use_cached and (out / "meta.json").exists():
+        return Analysis(aid, out, json.loads((out / "meta.json").read_text()), True)
+
+    started = time.monotonic()
+    warnings = []
+    settings.workdir.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix=".tmp-", dir=settings.workdir))
+    try:
+        used_keylog = _keylog_for(path, keylog, tmp)
+        run = lambda feed=None: tshark.packets(path, used_keylog, rsa_key, flt, settings.tshark, warnings, limit, settings.workdir, settings.analysis_timeout_s, feed)
+        writer = store.Writer(tmp / "analysis.duckdb")
+        b, views = Builder(), []
+        if path.stat().st_size > PART_BYTES:
+            number, parts = _read_in_parts(path, flt, run, b, writer, views, limit, slow_s, warnings)
+        else:
+            for p in run():
+                b.add(p)
+            _flush(b, writer, views, limit, slow_s)
+            dropped = nat_views(views, lambda sid: sid)
+            number, parts = {sid: sid for sid, _, _ in views if sid not in dropped}, 0
+            b.nat_views = len(dropped)
+        if used_keylog != keylog:
+            used_keylog.unlink()  # keys do not stay with the result
+        if b.total and b.t_first is None:
+            raise WrongFile(knowledge.t("This file holds no network packets."))
+        limit.check()
+        writer.close(number, b.dns_rows, lambda txns: _attach_dns(txns, b.dns_rows, b.dns_asks), b.packet_issues, b.quic.rows())
+        _mark_capture_end(tmp / "analysis.duckdb", b.t_last, slow_s)
+        limit.check()
+        return _save(tmp, out, aid, path, keylog, rsa_key, flt, settings, display_name, ts_version, started, warnings, b, parts, slow_s)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def client_randoms(path):
+    """The random of every ClientHello in a capture, found in the raw bytes, so any capture format and tunnel works.
+    The record header, the handshake header, the version and the random lead every ClientHello, so they sit in its first segment."""
+    found, tail = set(), b""
+    with open(path, "rb") as f:
+        while chunk := f.read(16 * CHUNK):
+            data = tail + chunk
+            found.update(r.hex() for r in CLIENT_HELLO.findall(data))
+            tail = data[-(HELLO_BYTES - 1):]
+    return found
+
+
+def _keylog_for(path, keylog, folder):
+    """A large key log cut to the sessions in the capture: tshark keeps every key it reads in memory.
+    A line is keyed by the client random in its second field. Other lines, like RSA ones, stay."""
+    if keylog is None or Path(keylog).stat().st_size <= KEYLOG_CUT_BYTES:
+        return keylog
+    randoms = client_randoms(path)
+    out = Path(folder) / "keylog"
+    with open(keylog, "rb") as src, open(out, "wb") as dst:
+        for line in src:
+            fields = line.split()
+            if len(fields) >= 3 and len(fields[1]) == 64 and fields[1].decode("ascii", "replace").lower() not in randoms:
+                continue
+            dst.write(line)
+    return out
+
+
+def _mark_capture_end(db_path, capture_end, slow_s):
+    """A request with no answer that the capture stopped right after is not known to be unanswered.
+    The end of the capture is known only after the last part, so this runs on the saved requests."""
+    if capture_end is None:
+        return
+    with store.connect(db_path, write=True) as db:
+        db.execute("UPDATE http_transactions SET cause = 'capture_end' WHERE cause = 'no_response' AND ? - req_end < ?", [capture_end, slow_s])
+
+
+def _flush(b, writer, views, limit, slow_s, part=None, offset=0):
+    """Finish the connections read so far, hand them to the writer and forget their packets."""
+    conns, txns = [], []
+    for s in b.streams.values():
+        limit.check()
+        c, t = finish_stream(s, slow_s)
+        if part is not None:
+            c.update(part=part, part_stream=c["stream"] - offset)
+        conns.append(c)
+        txns += t
+        views.append((s.sid, s.syn.t if s.syn else None, s.isn))
+    _attach_packet_size(b, txns)
+    writer.add(conns, txns, b.events)
+    b.streams.clear()
+    b.events.clear()
+
+
+def _read_in_parts(path, flt, run, b, writer, views, limit, slow_s, warnings):
+    """Analyze a large capture in parts of whole connections, so memory stays near that of one part.
+    Frame and connection numbers are turned back into those of the whole capture, the way Wireshark counts them."""
+    if flt.display and STREAM_FIELDS.search(flt.display):
+        raise tshark.TsharkError(knowledge.t("Captures over {n} MB are read in parts, so a display filter cannot use frame.number or tcp.stream. Filter by address, port or time instead.", n=PART_BYTES // CHUNK))
+    try:
+        plan = split.plan(path, -(-path.stat().st_size // PART_BYTES))
+    except split.Unsupported as e:
+        raise tshark.TsharkError(knowledge.t("Captures over {n} MB must be pcap or pcapng files.", n=PART_BYTES // CHUNK)) from e
+    if plan.truncated:
+        warnings.append("capture_truncated")
+    first_frame = {}  # first frame of every connection, by its number while reading
+    for k, part in enumerate(plan.parts):
+        offset = max(first_frame, default=-1) + 1
+        for p in run(lambda k=k: split.feed(path, plan, k)):
+            _to_whole(p, part.frames, offset, first_frame)
+            b.add(p)
+        _flush(b, writer, views, limit, slow_s, k, offset)
+    dropped = nat_views(views, first_frame.get)
+    b.nat_views = len(dropped)
+    order = sorted(first_frame, key=first_frame.get)
+    return {sid: i for i, sid in enumerate(order) if sid not in dropped}, len(plan.parts)
+
+
+def _to_whole(p, frames, offset, first_frame):
+    """Frame and connection numbers of one part, as numbers of the whole capture."""
+    whole = frames[int(p["frame.number"]) - 1]
+    p["frame.number"] = str(whole)
+    if p.get("tcp.analysis.acks_frame"):
+        p["tcp.analysis.acks_frame"] = str(frames[int(p["tcp.analysis.acks_frame"]) - 1])
+    for key in ("tcp.segment", "tls.segment"):
+        if p.get(key):
+            p[key] = tshark.AGG.join(str(frames[int(x) - 1]) for x in p[key].split(tshark.AGG))
+    if p.get("tcp.stream"):
+        sids = [int(x) + offset for x in p["tcp.stream"].split(tshark.AGG)]
+        for sid in sids:
+            first_frame.setdefault(sid, whole)
+        p["tcp.stream"] = tshark.AGG.join(map(str, sids))
+
+
+def _save(tmp, out, aid, path, keylog, rsa_key, flt, settings, display_name, ts_version, started, warnings, b, parts, slow_s):
+    with store.connect(tmp / "analysis.duckdb") as db:
+        facts = _facts(db)
+    meta = dict(
+        id=aid, filename=display_name or path.name, size=path.stat().st_size, created=time.time(), tshark=ts_version, version=__version__,
+        decryption="keylog" if keylog else "rsa_key" if rsa_key else None, filter=flt.expression(), decode_as=list(flt.decode_as),
+        capture_drops=split.drops(path),
+        packets=b.total, tcp_packets=b.tcp, bytes=b.bytes, connections=facts["connections"], transactions=facts["transactions"],
+        ip_fragments=b.fragments, frag_needed=b.frag_needed, copies=b.copies, tunnelled=b.tunnelled, capture_start=b.t_first, capture_end=b.t_last, duration_s=round(time.monotonic() - started, 3), slow_s=slow_s,
+        quality=_quality(b, facts), warnings=_warnings(b, facts, bool(keylog or rsa_key), warnings), parts=parts)
+    if settings.keep_capture:
+        shutil.copyfile(path, tmp / "capture")
+        (tmp / "capture").chmod(0o600)
+    meta["capture_kept"] = settings.keep_capture
+    (tmp / "meta.json").write_text(json.dumps(meta, indent=2))
+    shutil.rmtree(out, ignore_errors=True)
+    try:
+        tmp.rename(out)
+    except OSError:  # an identical analysis finished first
+        pass
+    return Analysis(aid, out, meta, False)
+
+
+def open_analysis(aid, settings=None):
+    settings = settings or Settings()
+    if not re.fullmatch(r"[0-9a-f]{20}", aid):
+        raise NotFound(aid)
+    d = settings.workdir / aid
+    if not (d / "meta.json").exists():
+        raise NotFound(aid)
+    return Analysis(aid, d, json.loads((d / "meta.json").read_text()), True)
+
+
+def list_analyses(settings=None):
+    settings = settings or Settings()
+    if not settings.workdir.exists():
+        return []
+    metas = [json.loads(m.read_text()) for m in settings.workdir.glob("*/meta.json") if not m.parent.name.startswith(".")]
+    return sorted(metas, key=lambda m: -m["created"])
+
+
+def delete(aid, settings=None):
+    settings = settings or Settings()
+    try:
+        target = open_analysis(aid, settings).dir
+    except NotFound:
+        return False
+    shutil.rmtree(target)
+    return True
+
+
+def _remove_stale(paths, cutoff):
+    for p in paths:
+        try:
+            if p.is_dir() and p.stat().st_mtime < cutoff:
+                shutil.rmtree(p, ignore_errors=True)
+        except OSError:
+            continue  # another process removed it, or it belongs to another user
+
+
+def purge(settings=None, now=None, tmp_root=Path("/tmp")):
+    """Delete expired analyses and what a killed process left behind, and return how many analyses were removed."""
+    settings = settings or Settings()
+    now = now or time.time()
+    old = [m["id"] for m in list_analyses(settings) if now - m["created"] > settings.ttl_days * 86400]
+    for aid in old:
+        delete(aid, settings)
+    records.trim_audit(settings)
+    cutoff = now - STALE_TMP_S
+    if settings.workdir.exists():
+        _remove_stale(settings.workdir.glob(".tmp-*"), cutoff)
+    if tmp_root.exists():  # these can hold captures and TLS keys
+        _remove_stale((p for p in tmp_root.iterdir() if p.name.startswith(TMP_PREFIXES)), cutoff)
+    return len(old)

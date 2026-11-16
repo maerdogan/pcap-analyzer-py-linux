@@ -1,0 +1,55 @@
+<div id="stats-overview" hx-get="/a/{{ a.id }}/stats/overview" hx-trigger="load" hx-swap="innerHTML">
+  <p class="empty">{{ _("Reading the packets again. A large capture can take a few minutes the first time.") }}</p>
+</div>
+<div id="stats-services" hx-get="/a/{{ a.id }}/stats/services" hx-trigger="load" hx-swap="innerHTML"></div>
+<div id="stats-voip" hx-get="/a/{{ a.id }}/stats/voip" hx-trigger="load" hx-swap="innerHTML"></div>
+<section class="panel">
+  <h2>{{ _("IO graph") }}</h2>
+  <form class="inline" hx-get="/a/{{ a.id }}/stats/io" hx-target="#io-graph" hx-swap="innerHTML">
+    <label class="wide">{{ _("Wireshark display filter") }} <input name="filter" spellcheck="false" placeholder="tcp.analysis.retransmission"></label>
+    <button>{{ _("Draw") }}</button>
+  </form>
+  <div id="io-graph"><div class="chart tall" data-chart="io" data-src="/api/a/{{ a.id }}/io" data-name="io-graph"></div></div>
+</section>
+<section class="panel">
+  <h2>{{ _("Flow graph") }}</h2>
+  <p class="muted">{{ _("Packets between hosts on a time axis, as in Wireshark's Flow Graph.") }}</p>
+  <form method="get" action="/a/{{ a.id }}/flow" class="inline">
+    <label class="wide">{{ _("Wireshark display filter") }} <input name="filter" spellcheck="false" placeholder="dns or icmp"></label>
+    <button>{{ _("Show flow graph") }}</button>
+  </form>
+</section>
+<section class="panel flush">
+  <h2>{{ _("HTTP load distribution") }}</h2>
+  {% if http_load %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Server") }}</th><th>{{ _("Host") }}</th><th class="num">{{ _("Requests") }}</th><th class="num">{{ _("Responses") }}</th><th class="num">{{ _("Share") }}</th></tr></thead>
+    <tbody>{% for s in http_load %}<tr><td>{{ s.server }}</td><td>{{ s.host or "–" }}</td><td class="num">{{ s.requests }}</td><td class="num">{{ s.responses }}</td><td class="num">{{ "%.1f" | format(s.share * 100) }}%</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="empty">{{ _("No HTTP requests in this capture.") }}</p>{% endif %}
+</section>
+{% if http_sequences %}
+<section class="panel flush">
+  <h2>{{ _("HTTP request sequences") }}</h2>
+  <p class="muted pad">{{ _("Which page each request came from, by its Referer header.") }}</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Referer") }}</th><th>{{ _("Requested URL") }}</th><th class="num">{{ _("Requests") }}</th></tr></thead>
+    <tbody>{% for s in http_sequences %}{% for t in s.targets %}<tr>{% if loop.first %}<td rowspan="{{ s.targets | length }}">{{ s.referer or _("No Referer") }}</td>{% endif %}<td>{{ t.url }}</td><td class="num">{{ t.requests }}</td></tr>{% endfor %}{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
+<section class="panel flush">
+  <h2>QUIC</h2>
+  {% if quic %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Client") }}</th><th>{{ _("Server") }}</th><th>{{ _("Server name") }}</th><th>{{ _("Version") }}</th><th class="num">{{ _("Handshake") }}</th><th class="num">{{ _("Duration") }}</th><th class="num">{{ _("Packets") }}</th><th class="num">{{ _("Bytes") }}</th><th class="num">{{ _("HTTP/3 requests") }}</th></tr></thead>
+    <tbody>{% for q in quic %}<tr><td>{{ q.client }}</td><td>{{ q.server }}</td><td>{{ q.sni or "–" }}</td><td>{{ q.version or "–" }}</td><td class="num">{{ q.handshake | seconds }}</td><td class="num">{{ q.duration | seconds }}</td><td class="num">{{ q.packets }}</td><td class="num">{{ q.bytes | size }}</td><td class="num">{{ q.requests if q.http3 or q.requests else "–" }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <p class="hint pad">{{ _("HTTP/3 requests are counted only when a TLS key log was given with the capture, because QUIC encrypts them.") }}</p>
+  {% else %}<p class="empty">{{ _("No QUIC traffic in this capture.") }}</p>{% endif %}
+</section>
+<section class="panel">
+  <h2>{{ _("Export objects") }}</h2>
+  <p class="muted">{{ _("Files carried over HTTP, SMB, TFTP, FTP, e-mail or DICOM, as Wireshark's Export Objects finds them.") }}</p>
+  <a class="button" href="/a/{{ a.id }}/objects">{{ _("Find files in this capture") }}</a>
+</section>

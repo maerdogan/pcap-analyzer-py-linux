@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui with context %}
+{% block title %}{{ t.method }} {{ t.uri }}{% endblock %}
+{% block capture_nav %}{{ ui.capnav(a, "connections", issue_count) }}{% endblock %}
+{% block main %}
+{{ ui.crumbs([(_("Captures"), "/"), (m.filename, "/a/" ~ a.id), (_("Connection {n}", n=t.conn.client_ip ~ ":" ~ t.conn.client_port), "/a/" ~ a.id ~ "/conn/" ~ t.stream), (t.method ~ " " ~ (t.uri | truncate(48, True, "…")), None)]) }}
+<header class="hero split">
+  <div class="hero-head"><div>
+    <h1 class="uri">{{ t.method }} {{ t.uri }}</h1>
+    <p><b>{{ t.cause_label }}.</b> {{ t.explanation }}</p>
+  </div></div>
+  <div class="score ends">
+    <div class="score-side"><small>{{ _("Client") }}</small><b>{{ t.conn.client_ip }}:{{ t.conn.client_port }}</b></div>
+    <div class="score-mid">{{ ui.status(t.status) }}<strong>{{ t.total | seconds }}</strong></div>
+    <div class="score-side"><small>{{ _("Server") }}</small><b>{{ t.conn.server_ip }}:{{ t.conn.server_port }}</b></div>
+  </div>
+</header>
+{% if t.guide %}{{ ui.guide(t.guide) }}{% endif %}
+{% if t.phases %}
+<section class="panel">
+  <h2>{{ _("Time breakdown") }}</h2>
+  <div class="budget">{{ ui.strip(t.phases) }}</div>
+  {{ ui.breakdown(t.phases) }}
+</section>
+{% endif %}
+<section class="panel">
+  <h2>{{ _("Details") }}</h2>
+  <dl class="facts">
+    <div><dt>{{ _("Status") }}</dt><dd>{{ t.status or _("No reply") }}{% if t.phrase %} {{ t.phrase }}{% endif %}</dd></div>
+    <div><dt>{{ _("Protocol") }}</dt><dd>{{ t.http_version }}</dd></div>
+    {% if t.grpc_status is defined and t.grpc_status is not none %}<div><dt>{{ _("gRPC status") }}</dt><dd>{{ t.grpc_status }}{% if t.grpc_message %} {{ t.grpc_message }}{% endif %}</dd></div>{% endif %}
+    <div><dt>{{ _("Total") }}</dt><dd>{{ t.total | seconds }}</dd></div>
+    <div><dt>{{ _("First byte") }}</dt><dd>{{ t.ttfb | seconds }}</dd></div>
+    <div><dt>{{ _("Server wait") }}</dt><dd>{{ t.wait | seconds }}</dd></div>
+    <div><dt>{{ _("Transfer") }}</dt><dd>{{ t.transfer | seconds }}</dd></div>
+    <div><dt>{{ _("Connection") }}</dt><dd>{{ _("New, request {n}", n=t.seq_on_conn) if t.new_conn else _("Reused, request {n}", n=t.seq_on_conn) }}</dd></div>
+    <div><dt>{{ _("Sent") }}</dt><dd>{{ t.req_bytes | size }}</dd></div>
+    <div><dt>{{ _("Received") }}</dt><dd>{{ t.resp_bytes | size }}</dd></div>
+    {% if t.dns_time is not none %}<div><dt>{{ _("DNS lookup") }}</dt><dd>{{ t.dns_time | seconds }}</dd></div>{% endif %}
+    {% if t.server_reported is not none %}<div><dt>{{ _("Server reported") }}</dt><dd>{{ t.server_reported | seconds }}</dd></div>{% endif %}
+    {% if t.content_encoding %}<div><dt>{{ _("Compression") }}</dt><dd>{{ t.content_encoding }}</dd></div>{% endif %}
+    {% if t.transfer_encoding %}<div><dt>{{ _("Transfer encoding") }}</dt><dd>{{ t.transfer_encoding }}</dd></div>{% endif %}
+    {% if t.x_forwarded_for %}<div><dt>{{ _("Original client") }}</dt><dd>{{ t.x_forwarded_for }}</dd></div>{% endif %}
+    {% if t.request_id %}<div><dt>{{ _("Request ID") }}</dt><dd>{{ t.request_id }}</dd></div>{% endif %}
+    <div><dt>{{ _("Packets") }}</dt><dd>{{ t.req_frame }}–{{ t.resp_frame or t.req_frame }}</dd></div>
+  </dl>
+</section>
+{% if m.capture_kept %}
+<section class="panel flush">
+  <h2>{{ _("Packets of this request") }}</h2>
+  <p class="muted pad">{{ _("Every packet of this request in order: the connection setup when the request opened the connection, the request, the response and its acknowledgment.") }}
+    <a href="/a/{{ a.id }}/conn/{{ t.stream }}">{{ _("All packets of the connection") }}</a></p>
+  <div id="txn-packets" hx-get="/a/{{ a.id }}/txn/{{ t.id }}/packets" hx-trigger="load" hx-swap="innerHTML"><p class="empty">{{ _("Reading the packets again. A large capture can take a few minutes the first time.") }}</p></div>
+</section>
+{% endif %}
+<section class="panel">
+  <h2>{{ _("Content") }}</h2>
+  <p class="hint">{{ _("Cookies, tokens and passwords are masked. Bodies show the first 2 KB when they are text.") }}</p>
+  <div class="two">
+    <div><h3>{{ _("Request") }}</h3><pre>{{ t.req_headers or _("Not available") }}</pre>{% if t.req_body %}<pre>{{ t.req_body }}</pre>{% endif %}</div>
+    <div><h3>{{ _("Response") }}</h3><pre>{{ t.resp_headers or _("Not available") }}</pre>{% if t.resp_body %}<pre>{{ t.resp_body }}</pre>{% endif %}</div>
+  </div>
+</section>
+{% endblock %}

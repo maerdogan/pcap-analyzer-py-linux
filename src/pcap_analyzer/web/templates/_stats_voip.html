@@ -1,0 +1,24 @@
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% elif v.calls or v.streams %}
+{% if v.calls %}
+<section class="panel flush">
+  <h2>{{ _("SIP calls") }}</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Time") }}</th><th>{{ _("From") }}</th><th>{{ _("To") }}</th><th>{{ _("Caller") }}</th><th>{{ _("Callee") }}</th><th>{{ _("State") }}</th><th class="num">{{ _("Answer") }}</th><th class="num">{{ _("Ringing after") }}</th><th class="num">{{ _("Answered after") }}</th><th class="num">{{ _("Talk time") }}</th><th class="num">{{ _("Messages") }}</th></tr></thead>
+    <tbody>{% for c in v.calls %}<tr><td>{{ c.start | clock }}</td><td>{{ c.from_user or "–" }}</td><td>{{ c.to_user or "–" }}</td><td>{{ c.caller or "–" }}</td><td>{{ c.callee or "–" }}</td><td>{{ c.state_label }}</td><td class="num">{{ c.status or "–" }}</td>
+      <td class="num">{{ c.ringing | seconds }}</td><td class="num">{{ c.setup | seconds }}</td><td class="num">{{ c.duration | seconds }}</td><td class="num">{{ c.messages }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
+{% if v.streams %}
+<section class="panel flush">
+  <h2>{{ _("RTP streams") }}</h2>
+  <p class="muted pad">{{ _("Jitter follows RFC 3550 with the payload type's clock. Dynamic payload types are read with an 8 kHz clock.") }}</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Source") }}</th><th>{{ _("Destination") }}</th><th>SSRC</th><th class="num">{{ _("Payload") }}</th><th class="num">{{ _("Packets") }}</th><th class="num">{{ _("Lost") }}</th><th class="num">{{ _("Out of order") }}</th><th class="num">{{ _("Largest gap") }}</th><th class="num">{{ _("Mean jitter") }}</th><th class="num">{{ _("Highest jitter") }}</th><th class="num">{{ _("Duration") }}</th></tr></thead>
+    <tbody>{% for s in v.streams %}<tr {% if s.loss > 0.01 or s.max_jitter > 0.03 %}class="bad"{% endif %}><td>{{ s.src }}</td><td>{{ s.dst }}</td><td>{{ s.ssrc }}</td><td class="num">{{ s.payload }}</td><td class="num">{{ s.packets }}</td>
+      <td class="num">{{ s.lost }} ({{ "%.1f" | format(s.loss * 100) }}%)</td><td class="num">{{ s.out_of_order }}</td><td class="num">{{ s.max_delta | seconds }}</td><td class="num">{{ s.mean_jitter | seconds }}</td><td class="num">{{ s.max_jitter | seconds }}</td><td class="num">{{ s.duration | seconds }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <p class="hint pad">{{ _("Voice quality usually suffers above 1% loss or 30 ms jitter. Those rows are marked.") }}</p>
+</section>
+{% endif %}
+{% endif %}

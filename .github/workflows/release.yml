@@ -1,0 +1,41 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+
+# A tag pushed again starts a second run. They would race to create the release, so they wait in turn.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Check the tag and read its notes
+        run: python3 tools/release.py "$TAG" > notes.md
+      - name: Prepare the release files
+        run: |
+          mkdir dist
+          # The whole folder, bundle included, for servers without git or internet
+          git archive --format=tar.gz --prefix="pcap-analyzer-py-linux/" -o "dist/pcap-analyzer-py-linux-${TAG#v}.tar.gz" HEAD
+          python3 -m pip wheel --no-deps . -w dist
+          pipx run --spec cyclonedx-bom==7.6.0 cyclonedx-py requirements requirements.lock --of JSON -o dist/sbom.cdx.json
+          (cd dist && sha256sum -- * > SHA256SUMS)
+      - name: Publish the release
+        run: gh release create "$TAG" dist/* --title "$TAG" --notes-file notes.md

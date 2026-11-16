@@ -1,0 +1,18 @@
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% elif p.rows %}
+<div class="table-wrap packets"><table>
+  <thead><tr><th class="num">{{ _("Frame") }}</th><th class="num">{{ _("Time") }}</th><th>{{ _("Direction") }}</th><th>{{ _("Flags") }}</th><th class="num">Seq</th><th class="num">Ack</th><th class="num">{{ _("Length") }}</th><th class="num">{{ _("Window") }}</th><th>{{ _("Protocol") }}</th><th>{{ _("Info") }}</th></tr></thead>
+  <tbody>{% for r in p.rows %}
+    <tr class="{{ 'from-client' if r.from_client else 'from-server' }}{% if r.marks %} marked{% endif %}">
+      <td class="num">{{ r.frame }}</td><td class="num">{{ "%.6f" | format(r.t) }}</td>
+      <td>{{ _("Client → server") if r.from_client else _("Server → client") }}</td><td>{{ r.flags | join(", ") or "–" }}</td>
+      <td class="num">{{ r.seq if r.seq is not none else "–" }}</td><td class="num">{{ r.ack if r.ack is not none else "–" }}</td><td class="num">{{ r.len }}</td><td class="num">{{ r.win if r.win is not none else "–" }}</td>
+      <td>{{ r.protocol }}</td><td>{% for m in r.marks %}<span class="status s4">{{ _(m) }}</span> {% endfor %}{{ r.info }}</td>
+    </tr>{% endfor %}</tbody>
+</table></div>
+<dl class="legend pad">
+  {% for x in p.legend %}<div><dt>{{ x.flag }}</dt><dd>{{ _(x.meaning) }}</dd></div>{% endfor %}
+  <div><dt>Seq</dt><dd>{{ _("where this packet's data starts in the sender's byte stream, counted from 0") }}</dd></div>
+  <div><dt>Ack</dt><dd>{{ _("the next byte the sender expects from the other side") }}</dd></div>
+</dl>
+{% if p.cut %}<p class="hint pad">{{ _("Only the first {n} packets are shown. Download the connection as PCAP to see all of it.", n=p.limit) }}</p>{% endif %}
+{% else %}<p class="empty">{{ _("No packets match.") }}</p>{% endif %}

@@ -1,0 +1,1 @@
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% else %}<div class="chart tall" data-chart="io" data-src="/api/a/{{ a.id }}/io?filter={{ flt | urlencode }}" data-name="io-graph"></div>{% endif %}
