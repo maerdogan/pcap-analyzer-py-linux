@@ -23,7 +23,7 @@
           </table>
         </div>
       </details>
-      {% if baseline == a.id %}<span class="status s2">{{ _("Baseline") }}</span>{% else %}<form method="post" action="/a/{{ a.id }}/baseline"><input type="hidden" name="csrf_token" value="{{ form_token() }}"><button>{{ _("Set as baseline") }}</button></form>{% endif %}
+      {% if baseline == a.id %}<span class="status s2">{{ _("Baseline") }}</span>{% elif me().can("analyst") %}<form method="post" action="/a/{{ a.id }}/baseline"><input type="hidden" name="csrf_token" value="{{ form_token() }}"><button>{{ _("Set as baseline") }}</button></form>{% endif %}
       <a class="button primary" href="/a/{{ a.id }}/inspect">{{ _("Inspect traffic") }}</a>
     </div>
   </div>

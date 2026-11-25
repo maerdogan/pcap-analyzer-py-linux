@@ -5,13 +5,12 @@ packet sizes, the IO graph, the flow graph, Follow Stream and Export Objects, ne
 read the kept capture again. A capture analyzed in parts is read in the same parts, so memory stays the same.
 """
 import hashlib
-import json
 import re
 import shutil
 from collections import defaultdict
 from pathlib import Path
 
-from . import knowledge, privacy, split, tshark
+from . import knowledge, privacy, split, tshark, vault
 
 AGG = tshark.AGG
 VERSION = 3  # saved statistics of an older layout are made again
@@ -118,14 +117,12 @@ def cached(a, name, make):
     folder = a.dir / "stats"
     path = folder / f"{name}.json"
     if path.exists():
-        data = json.loads(path.read_text())
+        data = vault.read_json(path, {})
         if data.get("version") == VERSION:
             return data["data"]
     data = make()
     folder.mkdir(exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(dict(version=VERSION, data=data)))
-    tmp.replace(path)
+    vault.write_json(path, dict(version=VERSION, data=data))
     return data
 
 
@@ -502,8 +499,7 @@ def objects(a, settings):
                         found.append(dict(protocol=proto, name=f.name, size=size, kept=False))
                         continue
                     name = f"{len(found):04d}-{SAFE_NAME.sub('_', f.name)[:120]}"
-                    shutil.copyfile(f, folder / name)
-                    (folder / name).chmod(0o600)
+                    vault.store_copy(f, folder / name)
                     total += size
                     found.append(dict(protocol=proto, name=f.name, file=name, size=size, kept=True, part=part))
             return collect

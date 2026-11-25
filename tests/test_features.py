@@ -205,10 +205,8 @@ def _web(settings, samples):
 
 
 def _signed_in(c):
-    import re
-    assert c.post("/login", data={"username": "admin", "password": "pw-for-tests"}).status_code == 303
-    c.headers["X-CSRF-Token"] = re.search(r'"X-CSRF-Token": "(\w+)"', c.get("/").text)[1]
-    return c
+    from conftest import sign_in
+    return sign_in(c, password="pw-for-tests")
 
 
 def _analysis(settings, samples):

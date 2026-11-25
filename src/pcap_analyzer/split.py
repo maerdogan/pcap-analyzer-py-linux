@@ -10,6 +10,8 @@ import zlib
 from array import array
 from dataclasses import dataclass, field
 
+from . import vault
+
 PCAP_MAGIC = {b"\xd4\xc3\xb2\xa1": "<", b"\xa1\xb2\xc3\xd4": ">", b"\x4d\x3c\xb2\xa1": "<", b"\xa1\xb2\x3c\x4d": ">"}
 PCAP_MODIFIED = {b"\x34\xcd\xb2\xa1": "<", b"\xa1\xb2\xcd\x34": ">"}  # Kuznetzov's format has 8 more bytes per record
 SHB, IDB, PB, SPB, EPB, JOURNAL = 0x0A0D0D0A, 1, 2, 3, 6, 9
@@ -242,7 +244,7 @@ def plan(path, count):
     keys = _Keys()
     parts = [Part() for _ in range(count)]
     frame, truncated = 0, False
-    with open(path, "rb") as f:
+    with vault.open_read(path) as f:
         head, records = _records(f)
         for pos, size, link, data in records:
             if size < 0:
@@ -265,7 +267,7 @@ def feed(path, plan, k):
     """The bytes of one part, as a capture tshark can read from a pipe."""
     part = plan.parts[k]
     out = bytearray(plan.head)
-    with open(path, "rb") as f:
+    with vault.open_read(path) as f:
         for pos, size in zip(part.offsets, part.lengths):
             f.seek(pos)
             out += f.read(size)
@@ -281,7 +283,7 @@ def drops(path):
     The counters run from the start of the capture, so the last block of each interface holds the total.
     A pcap file keeps no such counts, and None says the count is unknown."""
     try:
-        with open(path, "rb") as f:
+        with vault.open_read(path) as f:
             if f.read(4) != struct.pack("<I", SHB):
                 return None
             f.seek(0)

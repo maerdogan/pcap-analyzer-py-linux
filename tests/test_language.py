@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from pcap_analyzer import exports, engine, knowledge
 from pcap_analyzer.web.app import create_app
+from conftest import sign_in
 
 PW = "test-pass-for-unit-tests"
 ROOT = Path(__file__).resolve().parent.parent
@@ -43,9 +44,7 @@ def client(settings, samples):
     engine.analyze(samples / "backends.pcap", settings=settings)
     engine.analyze(samples / "http_scenarios.pcap", settings=settings)
     with TestClient(create_app(settings), follow_redirects=False, base_url="https://testserver") as c:
-        assert c.post("/login", data={"username": "admin", "password": PW}).status_code == 303
-        c.headers["X-CSRF-Token"] = re.search(r'"X-CSRF-Token": "(\w+)"', c.get("/").text)[1]
-        yield c
+        yield sign_in(c, password=PW)
 
 
 def _pages(client):

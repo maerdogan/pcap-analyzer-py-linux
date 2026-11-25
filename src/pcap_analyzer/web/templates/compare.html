@@ -30,6 +30,7 @@
   <p class="hint">{{ _("Filters left empty on B use the values of A. Fill B when addresses differ, for example before and after NAT.") }}</p>
   <label class="check"><input type="radio" name="mode" value="captures" {% if q.mode != "points" %}checked{% endif %}> {{ _("Before and after: compare the two as a whole") }}</label>
   <label class="check"><input type="radio" name="mode" value="points" {% if q.mode == "points" %}checked{% endif %}> {{ _("Same traffic at two points: match each request. A is nearer the client") }}</label>
+  <label>{{ _("Clock of B minus clock of A, ms") }} <input name="offset_ms" inputmode="decimal" size="8" value="{{ q.offset_ms or '' }}" placeholder="{{ _("estimated") }}"></label>
   <button class="primary">{{ _("Compare") }}</button>
 </form>
 </section>
@@ -94,6 +95,8 @@
 <section class="panel flush">
   <h2>{{ _("Same requests at two points") }}</h2>
   <p class="hint">{{ _("The split into two directions is an estimate. It takes the fastest trip each way as equal to remove the clock difference of {ms} ms.", ms=((points.clock_skew * 1000) | round(1))) }}</p>
+  {% if points.clock_given %}<p class="hint">{{ _("The clock difference you gave is used instead of the estimate.") }}</p>
+  {% elif points.drift_warning %}<p class="warn">{{ _("The clocks also drift apart by {ppm} ppm, {ms} ms a minute. The split takes this into account; sync both capture hosts with NTP for exact numbers.", ppm="%.0f" | format(points.clock_drift_ppm), ms="%.1f" | format(points.clock_drift_ppm * 60 / 1000)) }}</p>{% endif %}
   {% if points.rows %}
   <div class="table-wrap"><table>
     <thead><tr><th>{{ _("Match") }}</th><th>{{ _("Request") }}</th><th class="num">{{ _("Status") }}</th><th class="num">{{ _("Total at A") }}</th><th class="num">{{ _("Total at B") }}</th><th class="num">{{ _("Added between points") }}</th><th class="num">{{ _("Delay toward B") }}</th><th class="num">{{ _("Delay back") }}</th></tr></thead>

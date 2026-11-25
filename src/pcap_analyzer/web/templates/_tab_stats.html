@@ -1,3 +1,4 @@
+{% import "_macros.html" as ui with context %}
 <div id="stats-overview" hx-get="/a/{{ a.id }}/stats/overview" hx-trigger="load" hx-swap="innerHTML">
   <p class="empty">{{ _("Reading the packets again. A large capture can take a few minutes the first time.") }}</p>
 </div>
@@ -6,7 +7,7 @@
 <section class="panel">
   <h2>{{ _("IO graph") }}</h2>
   <form class="inline" hx-get="/a/{{ a.id }}/stats/io" hx-target="#io-graph" hx-swap="innerHTML">
-    <label class="wide">{{ _("Wireshark display filter") }} <input name="filter" spellcheck="false" placeholder="tcp.analysis.retransmission"></label>
+    <label class="wide">{{ _("Wireshark display filter") }} {{ ui.display_filter("filter") }}</label>
     <button>{{ _("Draw") }}</button>
   </form>
   <div id="io-graph"><div class="chart tall" data-chart="io" data-src="/api/a/{{ a.id }}/io" data-name="io-graph"></div></div>
@@ -15,7 +16,7 @@
   <h2>{{ _("Flow graph") }}</h2>
   <p class="muted">{{ _("Packets between hosts on a time axis, as in Wireshark's Flow Graph.") }}</p>
   <form method="get" action="/a/{{ a.id }}/flow" class="inline">
-    <label class="wide">{{ _("Wireshark display filter") }} <input name="filter" spellcheck="false" placeholder="dns or icmp"></label>
+    <label class="wide">{{ _("Wireshark display filter") }} {{ ui.display_filter("filter") }}</label>
     <button>{{ _("Show flow graph") }}</button>
   </form>
 </section>

@@ -8,7 +8,10 @@ from .knowledge import t
 MIN_SAMPLE = 5
 MATCH_WINDOW_S = 5.0
 NEGLIGIBLE_S = 0.001
-PHASE_AVG = ["network", "queue_time", "service", "transfer_clean", "retrans_time", "zero_window_time", "delayed_ack_time"]
+DRIFT_MIN_PAIRS = 5  # in each half of the matches
+DRIFT_MIN_SPAN_S = 10.0
+DRIFT_WARN_PPM = 20
+PHASE_AVG = ["network", "queue_time", "service", "transfer_clean", "retrans_time", "zero_window_time", "h2_flow_time", "delayed_ack_time"]
 
 
 def _delta(a, b):
@@ -22,7 +25,8 @@ def _pct(a, b):
 def _phases(db, f):
     tw, tp = reports.txn_where(f)
     where = f" WHERE {tw}" if tw else ""
-    return reports.one(db, f"""SELECT {', '.join(f'avg(t.{p}) AS {p}' for p in PHASE_AVG)}
+    have = reports.saved_columns(db, "http_transactions")
+    return reports.one(db, f"""SELECT {', '.join(f'avg(t.{p}) AS {p}' if p in have else f'NULL AS {p}' for p in PHASE_AVG)}
         FROM http_transactions t JOIN tcp_connections c USING (stream){where}""", tp)
 
 
@@ -110,6 +114,21 @@ def _clock_skew(pairs):
     return (min(forward) - min(back)) / 2 if forward and back else 0.0
 
 
+def _clock_model(pairs):
+    """The clock of B against A as offset + drift * (time - mid): each half of the pairs gives an offset, and their change over time is the drift.
+    Returns (offset at mid, drift in seconds per second, mid). Drift stays 0 with few pairs or a short span."""
+    skew = _clock_skew(pairs)
+    if len(pairs) < 2 * DRIFT_MIN_PAIRS:
+        return skew, 0.0, 0.0
+    ordered = sorted(pairs, key=lambda p: p[0]["req_start"])
+    first, second = ordered[:len(ordered) // 2], ordered[len(ordered) // 2:]
+    t1, t2 = first[len(first) // 2][0]["req_start"], second[len(second) // 2][0]["req_start"]
+    if t2 - t1 < DRIFT_MIN_SPAN_S:
+        return skew, 0.0, 0.0
+    s1, s2 = _clock_skew(first), _clock_skew(second)
+    return (s1 + s2) / 2, (s2 - s1) / (t2 - t1), (t1 + t2) / 2
+
+
 def _spread(values):
     values = sorted(v for v in values if v is not None)
     return dict(median=statistics.median(values), p95=reports.percentile(values, 0.95)) if values else dict(median=None, p95=None)
@@ -136,13 +155,15 @@ def _confidence(exact, likely, unclear, total):
     return ("high" if rate >= 0.8 and exact >= 0.9 * matched else "medium"), rate
 
 
-def two_point(db_a, db_b):
-    """Match requests seen at two points. A is the point nearer the client.
+def two_point(db_a, db_b, offset=None):
+    """Match requests seen at two points. A is the point nearer the client. offset, in seconds, is a clock difference
+    of B minus A that the user knows, and replaces the estimate."""
+    return match_points(_txns(db_a), _txns(db_b), offset)
 
-    An ID in both captures gives an exact match. Otherwise method, URL and status must agree and the
-    closest start time wins; those matches are labeled as likely.
-    """
-    a_rows, b_rows = _txns(db_a), _txns(db_b)
+
+def match_points(a_rows, b_rows, offset=None):
+    """An ID in both captures gives an exact match. Otherwise method, URL and status must agree and the
+    closest start time wins; those matches are labeled as likely. Both lists are in start order."""
     by_id = {}
     for b in b_rows:
         if b["request_id"]:
@@ -157,18 +178,20 @@ def two_point(db_a, db_b):
     likely, unclear = _likely(a_rows, b_rows, taken, used, _start_gap(exact))
     if likely and not exact:  # the first pass assumed equal clocks, so repeat it with the gap it found
         likely, unclear = _likely(a_rows, b_rows, taken, used, _start_gap(likely))
-    skew = _clock_skew(exact or likely)
+    skew, drift, mid = (offset, 0.0, 0.0) if offset is not None else _clock_model(exact or likely)
     rows = []
     for kind, pairs in (("exact", exact), ("likely", likely)):
         for a, b in pairs:
-            forward = b["req_start"] - a["req_start"] - skew
-            back = a["resp_start"] - b["resp_start"] + skew if a["resp_start"] and b["resp_start"] else None
+            at = skew + drift * (a["req_start"] - mid)  # the clock difference when this request passed
+            forward = b["req_start"] - a["req_start"] - at
+            back = a["resp_start"] - b["resp_start"] + at if a["resp_start"] and b["resp_start"] else None
             rows.append(dict(match=kind, method=a["method"], uri=a["uri"], url=a["url_template"], status=a["status"], id_a=a["id"], id_b=b["id"], total_a=a["total"], total_b=b["total"],
                              service_b=b["service"], added=_delta(b["total"], a["total"]), forward=forward, back=back))
     rows.sort(key=lambda r: r["added"] if r["added"] is not None else -1, reverse=True)
     confidence, rate = _confidence(len(exact), len(likely), unclear, len(a_rows))
     added = _spread(r["added"] for r in rows)
-    return dict(rows=rows, urls=_by_url(rows), clock_skew=skew, exact=len(exact), likely=len(likely), unclear=unclear, match_rate=rate, confidence=confidence,
+    return dict(rows=rows, urls=_by_url(rows), clock_skew=skew, clock_drift_ppm=drift * 1e6, clock_given=offset is not None,
+                drift_warning=offset is None and abs(drift * 1e6) >= DRIFT_WARN_PPM, exact=len(exact), likely=len(likely), unclear=unclear, match_rate=rate, confidence=confidence,
                 added=added["median"], added_p95=added["p95"], service=_spread(r["service_b"] for r in rows)["median"],
                 reversed=added["median"] is not None and added["median"] < -NEGLIGIBLE_S,
                 unmatched_a=len(a_rows) - len(rows), unmatched_b=len(b_rows) - len(rows))

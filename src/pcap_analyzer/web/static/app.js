@@ -118,7 +118,7 @@
   };
 
   const PHASE_COLORS = { connect_time: "#7b93ab", tls_time: "#7e6bc4", request_clean: "#1f9e8f", network: "#2f7fd1", queue_time: "#e0a82e", service: "#e2702a",
-    transfer_clean: "#3e9b5f", retrans_time: "#c8324a", zero_window_time: "#a8489f", delayed_ack_time: "#96764a" };
+    transfer_clean: "#3e9b5f", retrans_time: "#c8324a", zero_window_time: "#a8489f", h2_flow_time: "#4a6fa5", delayed_ack_time: "#96764a" };
   CHARTS.waterfall = (data) => ({
     grid: { left: 200, right: 16, top: 34, bottom: 28 }, legend: { top: 0, type: "scroll", icon: "roundRect", itemWidth: 12, itemHeight: 8 }, tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
     xAxis: { type: "value", axisLabel: { color: MUTED, formatter: (v) => secs(v) }, splitLine: { lineStyle: { color: LINE } } },
@@ -211,6 +211,51 @@
     });
   }
 
+  // One URL over time on the inspect page: phases stacked per time bucket, the 95th percentile as a dashed line, and requests and
+  // failed requests as bars below. Selecting a row of the URL table switches the chart and the table of where the time went beside it.
+  function setupUrlView(root) {
+    const view = root.id === "url-view" ? root : root.querySelector("#url-view");
+    if (!view || !view.dataset.urlData || view.dataset.ready || typeof echarts === "undefined") return;
+    view.dataset.ready = "1";
+    const all = JSON.parse(view.dataset.urlData);
+    const chart = echarts.init(view.querySelector("[data-url-chart]"), null, { renderer: "canvas" });
+    const count = (v) => (typeof v === "number" && v % 1 === 0 && v > 1 ? v : secs(v));
+    const draw = (i) => {
+      const u = all.urls[i], pts = u.series || [];
+      const used = Object.keys(all.labels).filter((p) => pts.some((d) => d.phases && d.phases[p] > 0));
+      const x = (d) => d.t * 1000;
+      chart.setOption({
+        animation: false, textStyle: { fontFamily: "Archivo, system-ui, sans-serif" },
+        grid: [{ left: 64, right: 16, top: 36, height: "58%" }, { left: 64, right: 16, top: "76%", bottom: 46 }],
+        legend: { top: 0, type: "scroll", icon: "roundRect", itemWidth: 12, itemHeight: 8 },
+        tooltip: { trigger: "axis", axisPointer: { type: "cross" }, valueFormatter: count },
+        axisPointer: { link: [{ xAxisIndex: "all" }] },
+        dataZoom: [{ type: "inside", xAxisIndex: [0, 1] }, { type: "slider", xAxisIndex: [0, 1], height: 16, bottom: 6 }],
+        xAxis: [{ type: "time", gridIndex: 0, axisLabel: { show: false }, axisLine: { lineStyle: { color: LINE } } },
+          { type: "time", gridIndex: 1, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: LINE } } }],
+        yAxis: [{ type: "value", gridIndex: 0, axisLabel: { color: MUTED, formatter: secs }, splitLine: { lineStyle: { color: LINE } } },
+          { type: "value", gridIndex: 1, minInterval: 1, axisLabel: { color: MUTED }, splitLine: { show: false }, name: t("Requests"), nameTextStyle: { color: MUTED, align: "left" } }],
+        series: [
+          ...used.map((p) => ({ name: all.labels[p], type: "line", stack: "phases", areaStyle: { opacity: 0.85 }, symbol: "none", lineStyle: { width: 0 },
+            itemStyle: { color: PHASE_COLORS[p] }, data: pts.map((d) => [x(d), d.phases[p] || 0]) })),
+          { name: t("95th percentile"), type: "line", symbol: "none", lineStyle: { color: INK, width: 1.5, type: "dashed" }, itemStyle: { color: INK }, data: pts.map((d) => [x(d), d.p95]) },
+          { name: t("Requests"), type: "bar", xAxisIndex: 1, yAxisIndex: 1, itemStyle: { color: BRAND }, data: pts.map((d) => [x(d), d.n]) },
+          { name: t("Failed"), type: "bar", xAxisIndex: 1, yAxisIndex: 1, barGap: "-100%", itemStyle: { color: BAD }, data: pts.map((d) => [x(d), d.failed]) },
+        ],
+      }, true);
+      view.querySelector("[data-url-title]").textContent = u.title;
+      view.querySelectorAll("[data-url-table]").forEach((el) => { el.hidden = el.dataset.urlTable !== String(i); });
+      document.querySelectorAll("tr[data-url-pick]").forEach((r) => r.classList.toggle("picked", r.dataset.urlPick === String(i)));
+    };
+    draw(0);
+    document.querySelectorAll("tr[data-url-pick]").forEach((r) => {
+      const pick = () => { draw(Number(r.dataset.urlPick)); view.scrollIntoView({ behavior: "smooth", block: "nearest" }); };
+      r.addEventListener("click", pick);
+      r.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+    });
+    addEventListener("resize", () => chart.resize());
+  }
+
   // Plain tables marked data-sortable: a column title sorts by that column, and again in the other direction.
   // Cells may carry data-value, the raw number behind a formatted value such as "1.2 s".
   function setupSorting(root) {
@@ -245,6 +290,7 @@
     setupSorting(root);
     setupGrids(root);
     setupCharts(root);
+    setupUrlView(root);
     root.querySelectorAll("[data-submit]").forEach((el) => el.addEventListener("change", () => el.form.submit()));
     // A most called flow fills the inspect filter with its two ends and runs it; other fields are cleared so the flow alone decides.
     root.querySelectorAll(".flow-pick").forEach((b) => b.addEventListener("click", () => {

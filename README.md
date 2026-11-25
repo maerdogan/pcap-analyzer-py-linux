@@ -26,10 +26,12 @@ Upload a PCAP and see where the time went: connection setup, network delay, serv
 - HTTPS decryption with a TLS key log file or RSA key
 - Wireshark's views in the browser: expert information as issues, protocol hierarchy, conversations, endpoints, packet lengths, IO graph, flow graph, Stevens, throughput, round trip and window graphs, Follow TCP Stream, Export Objects, Decode As, QUIC with HTTP/3, service response times of LDAP, Kerberos, SMB2, Kafka, SMTP, DCERPC, MQTT, AMQP and FTP, SIP calls and RTP jitter and loss
 - Export to CSV, Excel, JSON, PNG, SVG, HTML, HAR and PCAP
-- TLS view without a key: versions, ciphers, failed handshakes and certificate end dates
+- TLS view without a key: versions, ciphers, failed handshakes, certificate end dates and chain lengths, and client certificates of mutual TLS
+- Proxies and gateways: HTTP/2 flow control waits, stream resets and GOAWAY, PROXY protocol, the original client from forwarded headers, Envoy's upstream time, health checks and retries, NetScaler traces (nstrace) with both legs linked
 - WebSocket and gRPC handling, gzip captures and captures in several parts
 - Captures up to 1 GB, read in parts of whole connections so memory stays near 700 MiB
 - Limits per URL, a baseline capture, trends across captures, case notes and an activity log
+- Users with roles and groups, local or LDAP sign-in, and every file in the data folder encrypted ([Security](#security))
 - REST API with tokens ([docs/api.md](docs/api.md)), and `pcap-analyzer check` for CI
 
 See the [usage guide](docs/usage.md).
@@ -46,7 +48,7 @@ cd pcap-analyzer-py-linux
 python3 start-pcap-analyzer.py
 ```
 
-On a server without internet, download the repository as a ZIP on another machine and copy it over. The first start checks and unpacks the bundle once, writes the settings to `pcap-analyzer.env`, and starts the app in the background. Open <http://127.0.0.1:8000> and sign in as `admin` / `admin`. The app asks for a new password before anything else.
+On a server without internet, download the repository as a ZIP on another machine and copy it over. The first start checks and unpacks the bundle once, writes the settings to `pcap-analyzer.env`, and starts the app in the background. Open <http://127.0.0.1:8000> and sign in as `admin` / `admin`. The app asks for a new password, then for the master key that encrypts the data folder; after that you add groups and users under **Settings → Users**.
 
 ```bash
 python3 start-pcap-analyzer.py stop      # stop it
@@ -82,14 +84,14 @@ flowchart TD
     subgraph add["You must add"]
         proxy["HTTPS proxy<br/>certificate, IP allowlist,<br/>rate limit, access log"]
         firewall["Firewall or NetworkPolicy<br/>only the proxy reaches port 8000"]
-        disk["Encrypted storage<br/>and safe backups"]
+        disk["Backups of the data folder<br/>and of the master key"]
         limits["Regular image rebuilds"]
     end
 
     subgraph has["Included in pcap-analyzer"]
-        app["Web app on port 8000<br/>one shared login"]
+        app["Web app on port 8000<br/>users, roles and groups"]
         tshark["tshark<br/>reads untrusted files"]
-        data["Captures and results"]
+        data["Captures and results<br/>encrypted in the data folder"]
     end
 
     proxy --> firewall --> app
@@ -121,6 +123,43 @@ flowchart TD
 | A sandbox for tshark | tshark parses untrusted files and shares the app's permissions and data. A flaw in tshark would expose everything the app can read. | Run it in a non-root container, update tshark often, and analyze only captures from sources you trust. |
 | Resource limits | Without root, `start-pcap-analyzer.py` cannot limit CPU and memory, so a large analysis can take the whole server. | Keep `PCAP_ANALYZER_MAX_JOBS` low, or run it on a server with room to spare. |
 | Signed releases | The bundle is checked against `bundle/runtime.sha256`, but it is not signed, and bundled JavaScript does not update itself. | Build the bundle yourself with `tools/build-bundle.sh` and keep it up to date. |
+
+### Users, roles and groups
+
+The setup admin (`PCAP_ANALYZER_ADMIN_USER`, `admin` by default) signs in first with `admin` / `admin` and must choose a new password. Under **Settings → Users** an admin adds groups, with a description, and users: user name, full name, employee ID, group, role, and whether they sign in with a local password or through LDAP. The setup admin is listed there but cannot be changed or deleted. A group that still has users cannot be deleted.
+
+| Role | Can |
+|---|---|
+| viewer | open captures and export them |
+| analyst | also upload, delete the captures they uploaded, write notes, set a baseline and save filters |
+| admin | also manage users, preferences, API tokens, the activity log and encryption, and see every group |
+
+Anything a role may not do gets `403`. Every capture records who uploaded it and in which group. A user sees only the captures of their own group, on every page, export, comparison, trend, baseline and REST call, and a capture or job of another group answers `404`. Admins see all groups. Captures analyzed before groups existed, and uploads by the setup admin, belong to no group, so only admins see them. Only the uploader or an admin may delete a capture.
+
+Local users must change their password at the first sign-in and after an admin resets it. Every password, the setup admin's too, needs at least 12 characters and may not be `admin` or the user name. A local user's password is kept as a scrypt hash inside the encrypted users file.
+
+For LDAP, an admin sets the server (`ldap://` or `ldaps://`), a service account DN and password, the base DN and a user filter with `{0}` for the user name, such as `(sAMAccountName={0})`, and can test the connection. An LDAP user is found with the service account, with the name escaped as RFC 4515 says, and then signs in by binding as that user. Empty passwords are refused. The group and role still come from the app. `ldaps://` checks the server certificate against the system's trusted certificates, or against `PCAP_ANALYZER_LDAP_CA_FILE`.
+
+### Encryption at rest
+
+Everything the app keeps in its data folder is encrypted: captures, analysis databases and results, cached statistics, exported objects, notes, users and groups, LDAP settings, preferences, baselines, saved filters, API tokens and the activity log.
+
+- Each file has its own random AES-256-GCM key and is encrypted in 1 MiB segments. A segment's nonce is a random prefix of the file and the segment number, and the associated data marks the last segment, so a changed, reordered or cut file is found.
+- The file key is wrapped with an RSA-2048 data key pair (OAEP, SHA-256). Writing needs only its public half.
+- The data private key is sealed with a key derived from the master key (PBKDF2-HMAC-SHA256, 310,000 rounds). The master key has exactly 16 characters, at least one of them neither a letter nor a digit.
+- The master key is wrapped with a second RSA-2048 key pair, whose private key is sealed with the setup admin's password (PBKDF2-HMAC-SHA256, 310,000 rounds). A new admin password wraps only the admin key again, and a new master key seals only the data private key again, so no file is rewritten.
+- Each analysis database uses DuckDB's own AES-256-GCM encryption with a random key of its own, kept next to it as an encrypted file. A DuckDB older than 1.4, as in `linux-glibc2.17-server`, cannot do this, so there the vault encrypts the whole database file and a page reads it from a private plain copy, in `/dev/shm` where it exists, that is removed right after.
+- tshark reads an encrypted capture through a pipe, decrypted as it is read.
+
+The first setup: after the new password, the setup admin sets the master key on **Settings → Encryption**, entering the password again. Every file already in the data folder is then encrypted, and lines of the activity log written before are encrypted too; until then other users see a waiting page. After every restart nothing can be read until the setup admin signs in, and other users get a waiting page (`503`). The setup admin can show the master key, change it, and read how the data is encrypted on the same page. Keep a copy of the master key and of the admin password somewhere safe: without both, the data folder cannot be opened, and a copy of it opens nowhere else.
+
+A file in the data folder that was changed, cut, left unencrypted, or encrypted by another install raises a notice for admins on every page and is listed on the Encryption page until marked as seen. Files are checked whenever they are read, and the whole folder every hour.
+
+The activity log is kept in `.idx0`, whose name says nothing about it, and every line is encrypted on its own, so lines are added while the data is locked too. It records who did what, from which address and when.
+
+### Retention
+
+An analysis nobody opened for `PCAP_ANALYZER_TTL_DAYS` days (7 by default) is deleted at start and every hour, whether or not anyone uses the app. Opening any page of it counts, at most once an hour; one never opened counts from its upload. This works from file times, so it runs while the data is locked too.
 
 ### Before you upload
 

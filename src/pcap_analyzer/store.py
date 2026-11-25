@@ -1,10 +1,21 @@
-"""Write analysis results to one DuckDB file per analysis."""
+"""Write analysis results to one DuckDB file per analysis.
+
+Once the data folder is encrypted, each database uses DuckDB's own encryption (AES-256-GCM, from DuckDB 1.4) with a random key of its
+own. The key is kept next to it in db.key, a file encrypted by the vault, so it opens only while the vault is open. A DuckDB too old to
+encrypt, such as the one for glibc 2.17, gets the whole file encrypted by the vault instead, and a plain copy in a private temporary
+folder while it is read.
+"""
+import contextlib
 import json
+import os
+import secrets
 import shutil
 import tempfile
 from pathlib import Path
 
 import duckdb
+
+from . import vault
 
 SCHEMA = {
     "tcp_connections": """
@@ -15,7 +26,8 @@ SCHEMA = {
         close_type VARCHAR, closed_by VARCHAR, transactions INT, sack BOOLEAN, wscale INT, min_window BIGINT,
         retransmissions INT, zero_windows INT, byte_ratio_db DOUBLE, offload BOOLEAN, rst_code INT, one_way BOOLEAN,
         tls_cipher VARCHAR, tls_alpn VARCHAR, tls_alert VARCHAR, tls_resumed BOOLEAN, tls_no_answer BOOLEAN, tls_cert_expires VARCHAR, tls_unread BOOLEAN,
-        syn_seen BOOLEAN, challenge_ack BOOLEAN""",
+        syn_seen BOOLEAN, challenge_ack BOOLEAN, tls_chain INT, tls_client_cert_requested BOOLEAN, tls_client_certs INT, tls_client_name VARCHAR,
+        proxy_version VARCHAR, proxy_client VARCHAR, proxy_server VARCHAR, ns_pcb BIGINT, ns_linked_pcb BIGINT, ns_rtt_ms INT, ns_peer INT""",
     "http_transactions": """
         id BIGINT PRIMARY KEY, stream INT, h2_stream INT, seq_on_conn INT, new_conn BOOLEAN, method VARCHAR, uri VARCHAR,
         url_template VARCHAR, host VARCHAR, http_version VARCHAR, status INT, phrase VARCHAR, answered BOOLEAN, req_frame BIGINT, resp_frame BIGINT,
@@ -26,7 +38,9 @@ SCHEMA = {
         req_body VARCHAR, resp_body VARCHAR, retrans_count INT, retrans_time DOUBLE, zero_window_time DOUBLE,
         delayed_ack_time DOUBLE, queue_time DOUBLE, network DOUBLE, transfer_clean DOUBLE, request_clean DOUBLE,
         body_bytes BIGINT, truncated BOOLEAN, server_reported DOUBLE, cause VARCHAR, cause_share DOUBLE, flags VARCHAR,
-        max_packet INT, dns_time DOUBLE, grpc_status INT, grpc_message VARCHAR""",
+        max_packet INT, dns_time DOUBLE, grpc_status INT, grpc_message VARCHAR, h2_flow_time DOUBLE, proxy_client VARCHAR,
+        original_client VARCHAR, original_client_from VARCHAR, user_agent VARCHAR, health_check BOOLEAN, upstream_time DOUBLE, gateway_time DOUBLE,
+        attempt INT, retry_of BIGINT""",
     "tcp_events": "stream INT, frame BIGINT, time DOUBLE, sender VARCHAR, event VARCHAR",
     "dns_queries": "name VARCHAR, duration DOUBLE, frame BIGINT, time DOUBLE",
     "stream_parts": "stream INT, part INT, part_stream INT",
@@ -143,5 +157,129 @@ def _load_into(db, table, cols, rows, folder):
             db.execute(f"COPY {table} FROM '{f.name}' (FORMAT json)")
 
 
+def set_values(db, table, key, cols, rows, folder):
+    """Set some columns of saved rows, found by their key. rows hold the key first, then the values in the order of cols."""
+    rows = list(rows)
+    if not rows:
+        return
+    types = dict(c.split()[:2] for c in SCHEMA[table].split(",") if c.split() and c.split()[0].isidentifier())
+    names = [key, *cols]
+    db.execute(f"CREATE TEMP TABLE fix ({', '.join(f'{n} {types[n]}' for n in names)})")
+    _load_into(db, "fix", names, rows, folder)
+    db.execute(f"UPDATE {table} SET {', '.join(f'{c} = fix.{c}' for c in cols)} FROM fix WHERE {table}.{key} = fix.{key}")
+    db.execute("DROP TABLE fix")
+
+
+KEY_FILE = "db.key"
+NATIVE_ENCRYPTION = tuple(int(x) for x in duckdb.__version__.split(".")[:2]) >= (1, 4)
+RAM_FOLDER = Path("/dev/shm")
+
+
+def _quote(path):
+    return "'" + str(path).replace("'", "''") + "'"
+
+
+def _key(path):
+    key_file = Path(path).with_name(KEY_FILE)
+    return vault.read_text(key_file).strip() if key_file.exists() else None
+
+
 def connect(path, write=False):
-    return duckdb.connect(str(Path(path)), read_only=not write)
+    """A connection to an analysis database, plain or encrypted, with its tables in the default schema."""
+    path = Path(path)
+    key = _key(path)
+    if key:
+        db = duckdb.connect()
+        try:
+            db.execute(f"ATTACH {_quote(path)} AS analysis (ENCRYPTION_KEY '{key}'{'' if write else ', READ_ONLY'})")
+        except duckdb.Error as e:
+            db.close()
+            v = vault.find(path)
+            if v is not None and not isinstance(e, duckdb.IOException):
+                v.alert(path, "The database does not open with its key. It was changed by hand.")
+            raise vault.Tampered(f"The database does not open ({path.name})") from e
+        db.execute("USE analysis")
+        return db
+    if vault.is_encrypted(path):
+        return _Decrypted(path)
+    v = vault.find(path)
+    if v is not None and v.is_set_up() and not v.may_be_plain(path):
+        v.alert(path, vault.NOT_ENCRYPTED)
+        raise vault.Tampered(f"{vault.NOT_ENCRYPTED} ({path.name})")
+    return duckdb.connect(str(path), read_only=not write)
+
+
+class _Decrypted:
+    """A database the vault encrypted whole, for a DuckDB without encryption: read from a plain copy in a private folder, in memory where the system has one."""
+
+    def __init__(self, path):
+        base = RAM_FOLDER if RAM_FOLDER.is_dir() and os.access(RAM_FOLDER, os.W_OK) else None
+        self.folder = tempfile.mkdtemp(prefix="pcap-analyzer-db-", dir=base)
+        copy = Path(self.folder) / "analysis.duckdb"
+        try:
+            vault.store_copy(path, copy)
+            self.db = duckdb.connect(str(copy), read_only=True)
+        except BaseException:
+            shutil.rmtree(self.folder, ignore_errors=True)
+            raise
+
+    def __getattr__(self, name):
+        return getattr(self.db, name)
+
+    def close(self):
+        with contextlib.suppress(duckdb.Error):
+            self.db.close()
+        shutil.rmtree(self.folder, ignore_errors=True)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+    def __del__(self):
+        shutil.rmtree(self.folder, ignore_errors=True)
+
+
+def seal_database(path):
+    """Encrypt a finished plain database where it is: with DuckDB's own encryption and a new random key, or by the vault for an old DuckDB."""
+    path = Path(path)
+    v = vault.find(path)
+    if v is None or not v.is_set_up() or _key(path) or vault.is_encrypted(path):
+        return
+    if not NATIVE_ENCRYPTION:
+        v.encrypt_in_place(path)
+        return
+    key = secrets.token_hex(32)
+    tmp = path.with_name(f"{path.name}.{secrets.token_hex(4)}.tmp")
+    try:
+        with duckdb.connect() as db:
+            db.execute(f"ATTACH {_quote(path)} AS plain (READ_ONLY)")
+            db.execute(f"ATTACH {_quote(tmp)} AS sealed (ENCRYPTION_KEY '{key}')")
+            db.execute("COPY FROM DATABASE plain TO sealed")
+        vault.private600(tmp)
+        v.write_bytes(path.with_name(KEY_FILE), key.encode())  # before the swap, so the database never stays without its key
+        os.replace(tmp, path)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+        Path(f"{tmp}.wal").unlink(missing_ok=True)
+
+
+def check_database(v, path):
+    """For the hourly check: a database must be encrypted, and open with its key while the vault is open."""
+    path = Path(path)
+    if vault.is_encrypted(path):
+        if v.is_unlocked():
+            v.key_opens(path)  # a key that does not open raises the notice
+        return
+    key_file = path.with_name(KEY_FILE)
+    if not key_file.exists():
+        v.alert(path, vault.NOT_ENCRYPTED)
+        return
+    if not v.is_unlocked():
+        return
+    try:
+        with connect(path):
+            pass
+    except (duckdb.Error, OSError):
+        v.alert(path, "The database does not open with its key. It was changed by hand.")

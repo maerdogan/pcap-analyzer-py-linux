@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ _("Encryption") }}{% endblock %}
+{% block main %}
+<header class="page-head"><div><h1>{{ _("Encryption") }}</h1><p class="muted">{{ _("Captures, results, notes, users, settings and the activity log are kept encrypted in the data folder. A copy of the folder cannot be opened without the master key and the setup admin's password.") }}</p></div></header>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if message %}<p class="good" role="status">{{ message }}</p>{% endif %}
+{% if alerts %}
+<section class="panel flush">
+  <h2 class="pad">{{ _("Files changed by hand") }}</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Time") }}</th><th>{{ _("File") }}</th><th>{{ _("Problem") }}</th></tr></thead>
+    <tbody>{% for x in alerts %}<tr><td>{{ x.time | when }}</td><td><code>{{ x.file }}</code></td><td>{{ _(x.reason) }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <form method="post" action="/security/alerts/clear" class="pad"><input type="hidden" name="csrf_token" value="{{ form_token() }}"><button>{{ _("Mark as seen") }}</button></form>
+</section>
+{% endif %}
+<section class="panel">
+  <h2>{{ _("Master key") }}</h2>
+  {% if not set_up %}
+  <p class="warn">{{ _("Set the master key to finish the setup. Every file in the data folder is then encrypted, and users can sign in.") }}</p>
+  {% elif me().setup_admin %}
+  <p>{{ _("Current master key") }}:
+    {% if shown %}<code>{{ shown }}</code>{% else %}<code>••••••••••••••••</code>
+    <form method="post" action="/security/reveal" class="inline"><input type="hidden" name="csrf_token" value="{{ form_token() }}"><button class="link">{{ _("Show") }}</button></form>{% endif %}
+  </p>
+  {% endif %}
+  {% if me().setup_admin %}
+  <form method="post" action="/security">
+    <input type="hidden" name="csrf_token" value="{{ form_token() }}">
+    <div class="fields">
+      <label>{{ _("New master key") if set_up else _("Master key") }} <input type="password" name="master" required minlength="16" maxlength="16" autocomplete="off" spellcheck="false"></label>
+      <label>{{ _("Again") }} <input type="password" name="again" required minlength="16" maxlength="16" autocomplete="off" spellcheck="false"></label>
+      {% if not set_up %}<label>{{ _("Your password") }} <input type="password" name="password" required autocomplete="current-password"></label>{% endif %}
+    </div>
+    <p class="hint">{{ _("Exactly 16 characters, with at least one sign that is not a letter or digit, such as ! # % or *. Keep a copy somewhere safe.") }}</p>
+    <button class="primary">{{ _("Change the master key") if set_up else _("Set the master key and encrypt") }}</button>
+  </form>
+  {% else %}
+  <p class="hint">{{ _("Only the setup admin can set the master key, since it is wrapped with that admin's password.") }}</p>
+  {% endif %}
+</section>
+<section class="panel">
+  <h2>{{ _("How the data is encrypted") }}</h2>
+  <ul>{% for line in algorithm %}<li>{{ line }}</li>{% endfor %}</ul>
+  {% if not native %}<p class="warn">{{ _("This DuckDB cannot encrypt databases itself, so each analysis database is encrypted as a whole file and opened from a private plain copy while it is read.") }}</p>{% endif %}
+  <p class="hint">{{ _("After a restart nothing can be read until the setup admin signs in. Until then other users see a waiting page. Every hour, and whenever a file is read, the data folder is checked for files that were changed, cut, put there by hand or left unencrypted.") }}</p>
+</section>
+{% endblock %}

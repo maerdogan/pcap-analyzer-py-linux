@@ -1698,5 +1698,149 @@
         "ip_local_port_range"
       ]
     ]
+  },
+  "h2_flow_stall": {
+    "label": {
+      "en": "HTTP/2 flow control waits",
+      "tr": "HTTP/2 akış kontrolü beklemeleri"
+    },
+    "summary": [
+      {
+        "en": "The sender waited {h2_flow_time:time} ({pct}%) for the receiver to open its HTTP/2 window. Raise the initial window on the receiver, for example the gateway's or the NetScaler's HTTP/2 profile.",
+        "tr": "Gönderen, alıcının HTTP/2 penceresini açması için {h2_flow_time:time} (%{pct}) bekledi. Alıcıda, örneğin gateway'in ya da NetScaler'ın HTTP/2 profilinde, başlangıç penceresini büyütün."
+      }
+    ],
+    "meaning": {
+      "en": "HTTP/2 lets each receiver limit how much the sender may send, on the whole connection and on each stream. When the window is used up, the sender stops until a WINDOW_UPDATE opens it again. The data was ready, so this wait is not the service being slow. The windows are followed from the SETTINGS, DATA and WINDOW_UPDATE frames, so exact numbers need the start of the connection in the capture.",
+      "tr": "HTTP/2'de her alıcı, gönderenin hem bağlantının tamamında hem her stream'de ne kadar gönderebileceğini sınırlar. Pencere dolunca gönderen, bir WINDOW_UPDATE pencereyi yeniden açana kadar durur. Veri hazırdı, yani bu bekleme servisin yavaşlığı değildir. Pencereler SETTINGS, DATA ve WINDOW_UPDATE frame'lerinden izlenir; kesin sonuç için capture bağlantının başlangıcını içermelidir."
+    },
+    "checks": [
+      {
+        "en": "Raise the initial window on the receiver: SETTINGS_INITIAL_WINDOW_SIZE for each stream, and a connection WINDOW_UPDATE soon after the start. On a NetScaler this is the HTTP/2 profile, on Envoy `initial_stream_window_size` and `initial_connection_window_size`.",
+        "tr": "Alıcıda başlangıç penceresini büyütün: her stream için SETTINGS_INITIAL_WINDOW_SIZE, bağlantı için de başlangıçtan hemen sonra bir WINDOW_UPDATE. NetScaler'da bu HTTP/2 profilidir, Envoy'da `initial_stream_window_size` ve `initial_connection_window_size`."
+      },
+      {
+        "en": "Check whether the receiving application reads slowly. A receiver sends WINDOW_UPDATE only after its application has taken the data.",
+        "tr": "Alıcı uygulamanın yavaş okuyup okumadığına bakın. Alıcı WINDOW_UPDATE'i ancak uygulaması veriyi aldıktan sonra gönderir."
+      }
+    ],
+    "misread": {
+      "en": "This is not the TCP window. TCP can be wide open while HTTP/2 waits, so the TCP graphs show nothing wrong.",
+      "tr": "Bu TCP penceresi değildir. HTTP/2 beklerken TCP tamamen açık olabilir, bu yüzden TCP grafikleri bir sorun göstermez."
+    },
+    "sources": [
+      [
+        "rfc9113",
+        "5.2, 6.9"
+      ]
+    ]
+  },
+  "h2_reset": {
+    "label": {
+      "en": "HTTP/2 streams reset",
+      "tr": "Sıfırlanan HTTP/2 stream'leri"
+    },
+    "meaning": {
+      "en": "RST_STREAM ends one request on an HTTP/2 connection and leaves the others running. Its error code says why: REFUSED_STREAM means the server did not start the request, so a client may safely send it again; CANCEL means the sender no longer wanted the answer, often after a client or proxy timeout; INTERNAL_ERROR and PROTOCOL_ERROR point to a fault on one of the two sides.",
+      "tr": "RST_STREAM, bir HTTP/2 bağlantısındaki tek bir isteği sonlandırır, diğerleri sürer. Hata kodu nedenini söyler: REFUSED_STREAM sunucunun isteği hiç başlatmadığını, yani istemcinin güvenle yeniden gönderebileceğini; CANCEL gönderenin artık cevabı istemediğini, çoğunlukla bir istemci veya proxy zaman aşımından sonra; INTERNAL_ERROR ve PROTOCOL_ERROR ise iki taraftan birinde bir hatayı gösterir."
+    },
+    "checks": [
+      {
+        "en": "For REFUSED_STREAM, compare the number of open streams with the server's SETTINGS_MAX_CONCURRENT_STREAMS and the gateway's limits.",
+        "tr": "REFUSED_STREAM için açık stream sayısını sunucunun SETTINGS_MAX_CONCURRENT_STREAMS değeri ve gateway'in sınırlarıyla karşılaştırın."
+      },
+      {
+        "en": "For CANCEL, look at the timeouts of the client and of each proxy on the path.",
+        "tr": "CANCEL için istemcinin ve yoldaki her proxy'nin zaman aşımlarına bakın."
+      }
+    ],
+    "sources": [
+      [
+        "rfc9113",
+        "6.4, 7, 8.7"
+      ]
+    ]
+  },
+  "h2_goaway": {
+    "label": {
+      "en": "HTTP/2 connections shut down (GOAWAY)",
+      "tr": "Kapatılan HTTP/2 bağlantıları (GOAWAY)"
+    },
+    "meaning": {
+      "en": "GOAWAY tells the other side to open no new streams on this connection. Streams up to the last stream ID it names are still finished; later ones must be sent again on a new connection. NO_ERROR is a planned close, such as a gateway restart, an idle timeout or a limit on requests per connection; other codes report an error.",
+      "tr": "GOAWAY, karşı tarafa bu bağlantıda yeni stream açmamasını söyler. Belirttiği son stream kimliğine kadar olan stream'ler yine tamamlanır; sonrakiler yeni bir bağlantıda yeniden gönderilmelidir. NO_ERROR planlı bir kapanıştır, örneğin gateway'in yeniden başlaması, boşta kalma zaman aşımı veya bağlantı başına istek sınırı; diğer kodlar bir hata bildirir."
+    },
+    "checks": [
+      {
+        "en": "If GOAWAY comes often, compare the idle timeout and the maximum requests per connection of the gateway and the backend.",
+        "tr": "GOAWAY sık geliyorsa gateway ile backend'in boşta kalma zaman aşımlarını ve bağlantı başına en fazla istek sayılarını karşılaştırın."
+      },
+      {
+        "en": "Check that the client sends requests above the last stream ID again on a new connection instead of failing them.",
+        "tr": "İstemcinin son stream kimliğinden sonraki istekleri hata vermek yerine yeni bir bağlantıda yeniden gönderdiğini kontrol edin."
+      }
+    ],
+    "sources": [
+      [
+        "rfc9113",
+        "6.8"
+      ]
+    ]
+  },
+  "tls_no_client_cert": {
+    "label": {
+      "en": "Mutual TLS",
+      "tr": "Karşılıklı TLS"
+    },
+    "meaning": {
+      "en": "In mutual TLS the server also checks a certificate from the client. It asks with CertificateRequest, and a client without a fitting certificate answers with an empty one. With optional mTLS the server goes on; with required mTLS it ends the handshake, often with a certificate_required or handshake_failure alert. TLS 1.3 encrypts these messages, so they show only with a key log.",
+      "tr": "Karşılıklı TLS'te sunucu istemciden de sertifika ister ve doğrular. Bunu CertificateRequest ile ister; uygun sertifikası olmayan istemci boş bir sertifikayla cevap verir. İsteğe bağlı mTLS'te sunucu devam eder; zorunlu mTLS'te el sıkışmayı, çoğunlukla certificate_required veya handshake_failure alert'iyle sonlandırır. TLS 1.3 bu mesajları şifreler, yani yalnız key log ile görünürler."
+    },
+    "checks": [
+      {
+        "en": "Check the client certificate bound to the NetScaler service, or the client's configuration, and that a CA the server trusts issued it.",
+        "tr": "NetScaler servisine bağlı istemci sertifikasını ya da istemcinin ayarını, ve sertifikayı sunucunun güvendiği bir CA'nın verdiğini kontrol edin."
+      },
+      {
+        "en": "Compare the CA names the server lists in its CertificateRequest with the issuer of the client certificate.",
+        "tr": "Sunucunun CertificateRequest'te listelediği CA adlarını istemci sertifikasını verenle karşılaştırın."
+      }
+    ],
+    "sources": [
+      [
+        "rfc8446",
+        "4.3.2, 4.4.2"
+      ]
+    ]
+  },
+  "retried": {
+    "label": {
+      "en": "Retries",
+      "tr": "Yeniden denemeler"
+    },
+    "meaning": {
+      "en": "The same request ID came again after an attempt that failed with a 5xx status or got no answer, and that attempt had ended before the next one began. A retry policy in a gateway such as Envoy, or the client itself, sent it again. The user waited for every attempt, so the time of the first one belongs to the request too.",
+      "tr": "Aynı istek kimliği, 5xx durumuyla biten ya da cevap alamayan bir denemeden sonra yeniden geldi; o deneme bir sonraki başlamadan bitmişti. Envoy gibi bir gateway'in yeniden deneme politikası ya da istemcinin kendisi isteği tekrar gönderdi. Kullanıcı her denemeyi bekledi, yani ilk denemenin süresi de isteğe aittir."
+    },
+    "checks": [
+      {
+        "en": "Open the first attempt and find out why it failed; the retry only hides it.",
+        "tr": "İlk denemeyi açın ve neden başarısız olduğunu bulun; yeniden deneme sorunu yalnızca gizler."
+      },
+      {
+        "en": "Check the retry policy of the gateway: retry only idempotent methods, and limit the tries and the timeout of each try.",
+        "tr": "Gateway'in yeniden deneme politikasına bakın: yalnız idempotent metotları yeniden deneyin, deneme sayısını ve her denemenin zaman aşımını sınırlayın."
+      }
+    ],
+    "misread": {
+      "en": "Two legs of one proxy carry the same request ID too, but they overlap in time, so they are not counted as retries.",
+      "tr": "Bir proxy'nin iki bacağı da aynı istek kimliğini taşır, ama zamanda örtüştükleri için yeniden deneme sayılmazlar."
+    },
+    "sources": [
+      [
+        "rfc9110",
+        "9.2.2"
+      ]
+    ]
   }
 }

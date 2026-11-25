@@ -1,5 +1,5 @@
 {% macro mark() %}
-<img class="mark" src="/static/brand/logo.png" alt="PCAP Analyzer" width="220" height="80">
+<img class="mark" src="/static/brand/logo.png" alt="PCAP Analyzer" width="220" height="51">
 {% endmacro %}
 
 {% macro icon(name) %}
@@ -42,6 +42,10 @@
   </tbody>
 </table>
 {% endmacro %}
+
+{% macro display_filter(name, current="") %}
+<select name="{{ name }}">{% for value, label in display_filters.items() %}<option value="{{ value }}" {% if value == current %}selected{% endif %}>{{ _(label) }}</option>{% endfor %}</select>
+{%- endmacro %}
 
 {% macro rich(line) %}{% for part in line.split("`") %}{% if loop.index0 % 2 %}<code>{{ part }}</code>{% else %}{{ part }}{% endif %}{% endfor %}{% endmacro %}
 
@@ -112,9 +116,23 @@
     </div>
     <div class="wf-bar"><div class="bar-fill" style="width:{{ ((t.longest / longest * 100) if longest else 0) | round(1) }}%">{{ strip(t.phases) }}</div></div>
     <span class="took">{{ t.longest | seconds }}</span>
+    {% if t.phases %}<div class="wf-tip" role="tooltip"><h4>{{ _("Where the time went") }}</h4>{{ breakdown(t.phases) }}</div>{% endif %}
   </li>
   {% endfor %}
 </ol>
+{% endmacro %}
+
+{% macro pager(a, q, name, page, pages, anchor) %}
+{# Previous and next links for a list in pages. Every other query parameter stays. #}
+{% if pages > 1 %}
+{% set kept = [] %}{% for k, v in q.items() if k != name and v %}{% if kept.append((k | urlencode) ~ "=" ~ (v | urlencode)) %}{% endif %}{% endfor %}
+{% set root = "/a/" ~ a.id ~ "/inspect?" ~ (kept + [name ~ "="]) | join("&") %}
+<nav class="pager pad" aria-label="{{ _("Page {n} of {m}", n=page, m=pages) }}">
+  {% if page > 1 %}<a href="{{ root }}{{ page - 1 }}#{{ anchor }}" rel="prev">{{ _("Previous") }}</a>{% else %}<span class="off">{{ _("Previous") }}</span>{% endif %}
+  <span>{{ _("Page {n} of {m}", n=page, m=pages) }}</span>
+  {% if page < pages %}<a href="{{ root }}{{ page + 1 }}#{{ anchor }}" rel="next">{{ _("Next") }}</a>{% else %}<span class="off">{{ _("Next") }}</span>{% endif %}
+</nav>
+{% endif %}
 {% endmacro %}
 
 {% macro stats(s, scored=False) %}

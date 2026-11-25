@@ -172,10 +172,16 @@ def test_web_views(client, samples):  # noqa: F811
     o = client.get(f"/a/{aid}/stats/overview").text
     assert "Protocol hierarchy" in o and "10.20.2.30:443" in o
     assert "10.10.1.50:50000" in client.get(f"/a/{aid}", params={"tab": "stats"}, headers={"HX-Request": "true"}).text
-    assert client.get(f"/api/a/{aid}/io", params={"filter": "udp"}).json()["filter"] == "udp"
-    assert client.get(f"/a/{aid}/stats/io", params={"filter": "not a ) filter"}).text.count('class="error"') == 1
-    assert client.get(f"/api/a/{aid}/io", params={"filter": "not a ) filter"}).status_code == 400
+    assert client.get(f"/api/a/{aid}/io", params={"filter": "dns"}).json()["filter"] == "dns"
+    # only a preset reaches tshark; anything else draws all packets
+    whole = client.get(f"/api/a/{aid}/io").json()
+    for typed in ("udp", "not a ) filter"):
+        assert client.get(f"/api/a/{aid}/io", params={"filter": typed}).json() == whole
+        assert 'class="error"' not in client.get(f"/a/{aid}/stats/io", params={"filter": typed}).text
     assert "<svg" in client.get(f"/a/{aid}/flow", params={"filter": "dns"}).text
+    flow = client.get(f"/a/{aid}/flow", params={"filter": "udp"}).text
+    assert "All packets" in flow and '<option value="dns" >' in flow and '<option value="" selected>' in flow
+    assert '<option value="dns" selected>' in client.get(f"/a/{aid}/flow", params={"filter": "dns"}).text
     assert client.get(f"/api/a/{aid}/tcpgraph/0").json()["sides"]
     assert "GET /api/ecn" in client.get(f"/a/{aid}/conn/0/follow").text
     assert "Follow TCP stream" in client.get(f"/a/{aid}/conn/0").text

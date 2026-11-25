@@ -4,7 +4,7 @@ import getpass
 import json
 import sys
 
-from . import __version__, compare, engine, reports, tshark
+from . import __version__, compare, engine, reports, tshark, vault
 from .config import Settings
 
 
@@ -21,13 +21,24 @@ def _summary(a):
     print(f"  result: {a.db_path}")
 
 
+def _unlock(settings):
+    """An encrypted data folder opens only with the setup admin's password, asked for on the terminal."""
+    v = vault.of(settings.workdir)
+    if not v.is_set_up() or v.is_unlocked():
+        return
+    if not sys.stdin.isatty():
+        raise vault.Locked()
+    if not v.unlock(getpass.getpass("The data folder is encrypted. Setup admin password: ")):
+        raise ValueError("the password does not open the data folder")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pcap-analyzer")
     ap.add_argument("--version", action="version", version=__version__)
     sub = ap.add_subparsers(dest="cmd", required=True)
     an = sub.add_parser("analyze", help="analyze a capture")
     an.add_argument("file")
-    an.add_argument("--keylog", help="TLS key log file (SSLKEYLOGFILE)")
+    an.add_argument("--keylog", action="append", default=[], help="TLS key log file (SSLKEYLOGFILE); can be given more than once, such as for both sides of a proxy")
     an.add_argument("--rsa-key", help="RSA private key, works only for RSA key exchange")
     an.add_argument("--host", action="append", default=[], help="keep traffic of this IP or CIDR, use twice for a pair")
     an.add_argument("--port", type=int)
@@ -61,6 +72,7 @@ def main(argv=None):
     cp.add_argument("a")
     cp.add_argument("b")
     cp.add_argument("--two-point", action="store_true", help="match the same requests seen at two points, A nearer the client")
+    cp.add_argument("--offset-ms", type=float, help="with --two-point: the clock of B minus the clock of A, in ms, instead of the estimate")
     ck = sub.add_parser("check", help="exit with code 2 when an analysis breaks a limit, for CI")
     ck.add_argument("id")
     ck.add_argument("--p95", type=float, help="95th percentile limit in seconds")
@@ -75,6 +87,8 @@ def main(argv=None):
     args = ap.parse_args(argv)
     settings = Settings()
     try:
+        if args.cmd not in ("serve", "hash-password", "purge"):  # the retention job reads only file times
+            _unlock(settings)
         if args.cmd == "analyze":
             if len(args.host) > 2:
                 ap.error("--host can be given at most twice")
@@ -98,7 +112,7 @@ def main(argv=None):
         elif args.cmd == "compare":
             a, b = engine.open_analysis(args.a, settings), engine.open_analysis(args.b, settings)
             with a.connect() as da, b.connect() as db:
-                out = compare.two_point(da, db) if args.two_point else compare.captures(da, db, reports.Inspect(), reports.Inspect())
+                out = compare.two_point(da, db, None if args.offset_ms is None else args.offset_ms / 1000) if args.two_point else compare.captures(da, db, reports.Inspect(), reports.Inspect())
             print(json.dumps(out, indent=2, default=str))
         elif args.cmd == "check":
             a = engine.open_analysis(args.id, settings)

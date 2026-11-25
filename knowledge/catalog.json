@@ -207,6 +207,16 @@
         "en": "From the end of the request until the connection or capture ended.",
         "tr": "İsteğin bitişinden bağlantının veya capture'ın bitişine kadar geçen süre."
       }
+    },
+    "h2_flow_time": {
+      "label": {
+        "en": "HTTP/2 flow control wait",
+        "tr": "HTTP/2 akış kontrolü beklemesi"
+      },
+      "about": {
+        "en": "The sender used up the HTTP/2 window and waited for WINDOW_UPDATE.",
+        "tr": "Gönderen HTTP/2 penceresini doldurdu ve WINDOW_UPDATE bekledi."
+      }
     }
   },
   "issues": {
@@ -538,6 +548,61 @@
       "why": {
         "en": "The server still held an older connection on the same ports, so the new connection could not open at once.",
         "tr": "Sunucu aynı portlarda eski bir bağlantıyı hâlâ tutuyordu, bu yüzden yeni bağlantı hemen açılamadı."
+      }
+    },
+    "h2_flow_stall": {
+      "topic": "h2_flow_stall",
+      "title": {
+        "en": "HTTP/2 flow control waits",
+        "tr": "HTTP/2 akış kontrolü beklemeleri"
+      },
+      "why": {
+        "en": "A sender used up its HTTP/2 window and waited for the other side's WINDOW_UPDATE. This looks like a slow service, but the data was ready.",
+        "tr": "Gönderen HTTP/2 penceresini tüketti ve karşı tarafın WINDOW_UPDATE'ini bekledi. Bu yavaş servis gibi görünür ama veri hazırdı."
+      }
+    },
+    "h2_reset": {
+      "topic": "h2_reset",
+      "title": {
+        "en": "HTTP/2 streams reset",
+        "tr": "Sıfırlanan HTTP/2 stream'leri"
+      },
+      "why": {
+        "en": "RST_STREAM ended single requests. REFUSED_STREAM means the server would not take more; CANCEL usually comes from the client or a proxy timeout.",
+        "tr": "RST_STREAM tek tek istekleri sonlandırdı. REFUSED_STREAM sunucunun daha fazla almadığını, CANCEL ise çoğunlukla istemcinin veya bir proxy zaman aşımının durdurduğunu gösterir."
+      }
+    },
+    "h2_goaway": {
+      "topic": "h2_goaway",
+      "title": {
+        "en": "HTTP/2 connections shut down (GOAWAY)",
+        "tr": "Kapatılan HTTP/2 bağlantıları (GOAWAY)"
+      },
+      "why": {
+        "en": "A side announced it takes no new streams on this connection. NO_ERROR is a planned drain, such as a gateway restart; other codes are errors.",
+        "tr": "Bir taraf bu bağlantıda yeni stream almayacağını duyurdu. NO_ERROR planlı bir boşaltmadır, örneğin gateway yeniden başlarken; diğer kodlar hatadır."
+      }
+    },
+    "tls_no_client_cert": {
+      "topic": "tls_no_client_cert",
+      "title": {
+        "en": "Client certificate asked for but not sent",
+        "tr": "İstenen istemci sertifikası gönderilmedi"
+      },
+      "why": {
+        "en": "The server sent CertificateRequest and the client answered with an empty certificate. With required mTLS, as between a NetScaler and a gateway, the server then ends the handshake. Check the client certificate binding on the NetScaler service or the client's configuration.",
+        "tr": "Sunucu CertificateRequest gönderdi, istemci boş sertifikayla cevap verdi. NetScaler ile gateway arasındaki gibi zorunlu mTLS'te sunucu el sıkışmayı burada keser. NetScaler servisindeki istemci sertifikası bağlantısını ya da istemcinin ayarını kontrol edin."
+      }
+    },
+    "retried": {
+      "topic": "retried",
+      "title": {
+        "en": "Requests sent again after a failure",
+        "tr": "Hatadan sonra yeniden gönderilen istekler"
+      },
+      "why": {
+        "en": "The same request ID came again after an attempt that failed with 5xx or got no answer. A gateway retry policy or the client sent it again, so the user waited for both attempts.",
+        "tr": "Aynı istek kimliği, 5xx ile biten ya da cevap alamayan bir denemeden sonra yeniden geldi. Gateway'in yeniden deneme politikası ya da istemci isteği tekrar gönderdi; kullanıcı iki denemeyi de bekledi."
       }
     }
   },

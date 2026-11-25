@@ -3,6 +3,7 @@
 
 Signs in, uploads a capture, opens every page, downloads each export, deletes the analysis and signs out.
 It needs only Python. The password comes from PCAP_ANALYZER_SMOKE_PASSWORD, and a wrong form token must be refused.
+On a new install the setup admin sets the master key before anything else; give it in PCAP_ANALYZER_SMOKE_MASTER_KEY to do that too.
 
 Usage: smoke.py URL CAPTURE [--user NAME] [--cafile CERT]
 """
@@ -19,7 +20,7 @@ import urllib.request
 import uuid
 
 TABS = ("overview", "issues", "urls", "connections", "hosts", "backends", "tls", "stats")
-PACKET_VIEWS = ("stats/overview", "stats/services", "stats/voip", "stats/io?filter=tcp", "flow?filter=tcp", "objects")  # these read the kept capture again
+PACKET_VIEWS = ("stats/overview", "stats/services", "stats/voip", "stats/io?filter=tls", "flow?filter=dns", "objects")  # these read the kept capture again
 TABLES = ("requests", "urls", "connections", "hosts", "issues")
 FORMATS = ("csv", "json", "xlsx")
 ANALYSIS_LIMIT_S = 180
@@ -75,12 +76,26 @@ def _check_headers(response, secure):
         raise Failed(f"missing response headers: {', '.join(missing)}")
 
 
-def walk(b, user, password, capture):
+def set_master_key(b, password, master):
+    """The first sign-in of the setup admin: the master key encrypts the data folder."""
+    if not master:
+        raise Failed("the setup is not finished: set the master key on the Encryption page, or give PCAP_ANALYZER_SMOKE_MASTER_KEY")
+    _, page = b.call("/security")
+    token = re.search(rb'name="csrf_token" value="(\w+)"', page)
+    if not token:
+        raise Failed("the Encryption page has no form token")
+    b.form("/security", dict(master=master, again=master, password=password, csrf_token=token[1].decode()), expect=200)
+    print("master key set, data folder encrypted")
+
+
+def walk(b, user, password, capture, master=None):
     _, body = b.call("/healthz")
     print("health:", body.decode())
     b.call("/login")
     login, _ = b.form("/login", dict(username=user, password=password))
     secure = "secure" in ";".join(login.headers.get_all("set-cookie")).lower()
+    if login.headers.get("location") == "/security":
+        set_master_key(b, password, master)
     response, home = b.call("/")
     _check_headers(response, secure)
     print("signed in, cookie secure:", secure)
@@ -158,7 +173,7 @@ def main():
     if not password:
         sys.exit("set PCAP_ANALYZER_SMOKE_PASSWORD first")
     try:
-        walk(Browser(args.url, args.cafile), args.user, password, args.capture)
+        walk(Browser(args.url, args.cafile), args.user, password, args.capture, os.environ.get("PCAP_ANALYZER_SMOKE_MASTER_KEY"))
     except (Failed, OSError) as e:
         sys.exit(f"FAILED: {e}")
     print("OK")

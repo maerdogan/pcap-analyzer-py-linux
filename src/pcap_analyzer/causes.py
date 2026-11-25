@@ -5,11 +5,11 @@ from . import knowledge
 
 SLOW_S = 0.2  # requests under this are normal, whatever their largest phase is
 PHASES = ["connect_time", "tls_time", "request_clean", "network", "queue_time", "service", "transfer_clean",
-          "retrans_time", "zero_window_time", "delayed_ack_time"]
+          "retrans_time", "zero_window_time", "h2_flow_time", "delayed_ack_time"]
 CAUSE_OF_PHASE = {
     "connect_time": "connect", "tls_time": "tls", "request_clean": "upload", "network": "network",
     "queue_time": "queueing", "service": "service", "transfer_clean": "transfer", "retrans_time": "loss",
-    "zero_window_time": "slow_client", "delayed_ack_time": "delayed_ack",
+    "zero_window_time": "slow_client", "h2_flow_time": "h2_flow_stall", "delayed_ack_time": "delayed_ack",
 }
 CAUSES = sorted(set(CAUSE_OF_PHASE.values()) | {"normal", "no_response", "capture_end", "connection_reset", "truncated", "gateway", "websocket"})
 ROUND_TIMEOUTS = (5, 10, 15, 30, 60, 90, 120, 180, 240, 300, 600, 900)  # seconds people set as limits

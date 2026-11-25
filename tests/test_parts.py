@@ -130,13 +130,13 @@ def test_fragments_follow_the_first():
 def test_connection_export_from_a_part(samples, tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from pcap_analyzer.web.app import create_app
-    from test_web import PW, form_token, upload
+    from conftest import sign_in
+    from test_web import PW, upload
 
     monkeypatch.setattr(engine, "PART_BYTES", (samples / "http_scenarios.pcap").stat().st_size // 4)
     s = Settings(workdir=tmp_path / "w", admin_password=PW)
     with TestClient(create_app(s), follow_redirects=False, base_url="https://testserver") as c:
-        c.post("/login", data={"username": "admin", "password": PW})
-        c.headers["X-CSRF-Token"] = form_token(c)
+        sign_in(c, password=PW)
         aid = upload(c, samples / "http_scenarios.pcap").rsplit("/", 1)[1]
         assert engine.open_analysis(aid, s).meta["parts"] > 1
         r = c.get(f"/export/{aid}/conn/2.pcapng")

@@ -44,7 +44,7 @@ NEW_DUCKDB_GLIBC = (2, 26)  # the bundled DuckDB needs this; older systems get t
 START_S = 60
 
 SETTINGS_TEMPLATE = """# pcap-analyzer settings. Run "python3 start-pcap-analyzer.py restart" after a change.
-# The first sign-in is admin / admin, and the app asks for a new password before anything else.
+# The first sign-in is admin / admin, and the app asks for a new password and the master key before anything else.
 PCAP_ANALYZER_ADMIN_USER=admin
 
 # 127.0.0.1 reaches only this host. Use 0.0.0.0 to reach it from other machines, with a certificate or an HTTPS proxy.
@@ -319,11 +319,12 @@ def start():
 def sign_in_hint(values, env):
     """admin / admin only works until a password is set, in the app or in pcap-analyzer.env."""
     user = values.get("PCAP_ANALYZER_ADMIN_USER") or "admin"
-    chosen = os.path.isfile(os.path.join(env["PCAP_ANALYZER_WORKDIR"], ".admin-password.json"))
+    # the password, once chosen, lives in the data folder: as a hash, then as the key of the encrypted data
+    chosen = any(os.path.isfile(os.path.join(env["PCAP_ANALYZER_WORKDIR"], f)) for f in (".admin-password.json", ".keyring"))
     configured = values.get("PCAP_ANALYZER_ADMIN_PASSWORD") not in (None, "", "admin") or values.get("PCAP_ANALYZER_ADMIN_PASSWORD_HASH")
     if chosen or configured:
         return "sign in as {} with your password.".format(user)
-    return "sign in as {} / admin. The app then asks for a new password.".format(user)
+    return "sign in as {} / admin. The app then asks for a new password and the master key that encrypts the data.".format(user)
 
 
 def stop(quiet=False):

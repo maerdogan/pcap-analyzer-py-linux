@@ -2,6 +2,18 @@
 {% if r.connections.connections == 0 %}
 <p class="empty">{{ _("Nothing in this capture matches. Check the addresses, or clear a filter.") }}</p>
 {% else %}
+{% set tr = r.traffic %}
+<section class="panel flush" id="all-traffic">
+  <div class="section-head"><h2>{{ _("All traffic") }}</h2><p class="muted">{{ _("{n} connections", n=tr.total) }}</p></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Client") }}</th><th>{{ _("Server") }}</th><th>{{ _("Type") }}</th><th class="num">{{ _("Requests") }}</th><th class="num">{{ _("Packets") }}</th><th class="num">{{ _("Duration") }}</th><th>{{ _("Closed by") }}</th></tr></thead>
+    <tbody>{% for c in tr.rows %}
+      <tr><td><a href="/a/{{ a.id }}/conn/{{ c.stream }}">{{ c.client_ip }}:{{ c.client_port }}</a></td><td>{{ c.server_ip }}:{{ c.server_port }}</td><td>{{ c.kind }}</td>
+      <td class="num">{{ c.requests }}</td><td class="num">{{ c.packets }}</td><td class="num">{{ c.duration | seconds }}</td><td>{{ _((c.closed_by or "–") | capitalize) }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {{ ui.pager(a, q, "conn_page", tr.page, tr.pages, "all-traffic") }}
+</section>
 {% if r.requests.requests %}<section class="hero">{{ ui.score(r.requests) }}{{ ui.stats(r.requests, True) }}</section>{% endif %}
 <section class="panel">
   <h2>{{ _("Summary") }}</h2>
@@ -15,13 +27,45 @@
   </dl>
 </section>
 {% if r.urls %}
+{% set first = r.urls[0] %}
+<section class="panel url-view" id="url-view" data-url-data='{{ url_chart | tojson }}'>
+  <div class="section-head"><h2 data-url-title>{{ first.method }} {{ first.url }}</h2><p class="muted">{{ _("Per {time}", time=r.bucket | seconds) }}</p></div>
+  <div class="url-view-body">
+    <div class="chart" data-url-chart></div>
+    <div class="url-side">
+      {% for u in r.urls %}{% set bd = u.breakdown %}
+      <div class="url-table" data-url-table="{{ loop.index0 }}" {% if not loop.first %}hidden{% endif %}>
+        <dl class="facts">
+          <div><dt>{{ _("Requests") }}</dt><dd>{{ u.requests }}</dd></div>
+          <div><dt>{{ _("Average") }}</dt><dd>{{ u.avg_total | seconds }}</dd></div>
+          <div><dt>{{ _("95th percentile") }}</dt><dd>{{ u.p95_total | seconds }}</dd></div>
+        </dl>
+        <table class="breakdown"><tbody>
+          {% for key, label in [("rtt_client", _("Client ↔ capture point, round trip")), ("rtt_server", _("Capture point ↔ server, round trip"))] if bd[key] %}
+          <tr><td>{{ label }}</td><td class="num">{{ bd[key] | seconds }}</td></tr>
+          {% endfor %}
+          <tr class="sep"><td colspan="2">{{ _("Average request") }}</td></tr>
+          {% for p, label in phase_labels.items() %}
+          {% if bd[p] %}<tr><td><i class="swatch ph-{{ p }}"></i>{{ label }}</td><td class="num">{{ bd[p] | seconds }}</td></tr>{% endif %}
+          {% if p == "service" %}
+          {% if bd.upstream_time %}<tr><td>↳ {{ _("Upstream time reported by the gateway") }}</td><td class="num">{{ bd.upstream_time | seconds }}</td></tr>{% endif %}
+          {% if bd.gateway_time %}<tr><td>↳ {{ _("Time in the gateway itself") }}</td><td class="num">{{ bd.gateway_time | seconds }}</td></tr>{% endif %}
+          {% endif %}
+          {% endfor %}
+        </tbody></table>
+      </div>
+      {% endfor %}
+      <p class="hint">{{ _("Round trips are per connection and are not part of the total. The phases add up to the average.") }}</p>
+    </div>
+  </div>
+</section>
 <section class="panel flush">
   <h2>{{ _("By URL") }}</h2>
-  <p class="hint pad">{{ _("Select a column title to sort by it, and again to turn the order around.") }}</p>
+  <p class="hint pad">{{ _("Select a row to see that URL over time above. Select a column title to sort by it.") }}</p>
   <div class="table-wrap"><table data-sortable>
     <thead><tr><th data-sort="text">{{ _("Method") }}</th><th data-sort="text">URL</th><th class="num" data-sort="num">{{ _("Requests") }}</th><th class="num" data-sort="num">{{ _("Failed") }}</th><th class="num" data-sort="num">{{ _("Total time") }}</th><th class="num" data-sort="num">{{ _("Average") }}</th><th class="num" data-sort="num">{{ _("95th percentile") }}</th><th class="num" data-sort="num">{{ _("Slowest") }}</th><th data-sort="text">{{ _("Status") }}</th></tr></thead>
     <tbody>{% for u in r.urls %}
-      <tr><td>{{ u.method }}</td><td>{{ u.url }}</td><td class="num" data-value="{{ u.requests }}">{{ u.requests }}</td><td class="num" data-value="{{ u.failed }}">{{ u.failed }}</td>
+      <tr class="clickable" data-url-pick="{{ loop.index0 }}" tabindex="0"><td>{{ u.method }}</td><td>{{ u.url }}</td><td class="num" data-value="{{ u.requests }}">{{ u.requests }}</td><td class="num" data-value="{{ u.failed }}">{{ u.failed }}</td>
       <td class="num" data-value="{{ u.sum_total if u.sum_total is not none else -1 }}">{{ u.sum_total | seconds }}</td><td class="num" data-value="{{ u.avg_total if u.avg_total is not none else -1 }}">{{ u.avg_total | seconds }}</td>
       <td class="num" data-value="{{ u.p95_total if u.p95_total is not none else -1 }}">{{ u.p95_total | seconds }}</td><td class="num" data-value="{{ u.max_total if u.max_total is not none else -1 }}">{{ u.max_total | seconds }}</td>
       <td>{% for s in u.statuses %}{{ s.status or _("none") }} ×{{ s.requests }}{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>
@@ -29,5 +73,20 @@
   </table></div>
 </section>
 {% endif %}
-{% if r.slowest %}<section class="panel flush"><h2>{{ _("Slowest {n} requests", n=r.slowest | length) }}</h2>{{ ui.waterfall(r.slowest, a) }}</section>{% endif %}
+{% if r.requests.requests %}
+<section class="panel flush" id="slowest">
+  <h2>{{ _("Slowest {n} requests", n=r.slow_listed) }}</h2>
+  <form class="inline pad" method="get" action="/a/{{ a.id }}/inspect#slowest">
+    {% for k in filter_fields + ("start", "end") if q[k] %}<input type="hidden" name="{{ k }}" value="{{ q[k] }}">{% endfor %}
+    <label>{{ _("Request contains") }} <input name="slow_q" spellcheck="false" value="{{ q.slow_q or '' }}" placeholder="GET /api"></label>
+    <label>{{ _("Status") }} <select name="slow_status"><option value="">{{ _("All") }}</option>{% for s in ("2xx", "3xx", "4xx", "5xx", "none") %}<option value="{{ s }}" {% if q.slow_status == s %}selected{% endif %}>{{ _("No response") if s == "none" else s }}</option>{% endfor %}</select></label>
+    <label>{{ _("Duration from, ms") }} <input name="slow_min_ms" type="number" min="0" step="any" size="7" value="{{ q.slow_min_ms or '' }}"></label>
+    <label>{{ _("to, ms") }} <input name="slow_max_ms" type="number" min="0" step="any" size="7" value="{{ q.slow_max_ms or '' }}"></label>
+    <button>{{ _("Filter") }}</button>
+  </form>
+  <p class="hint pad">{{ _("{n} requests match.", n=r.slow_matched) }}</p>
+  {% if r.slowest %}{{ ui.waterfall(r.slowest, a) }}{{ ui.pager(a, q, "slow_page", r.slow_page, r.slow_pages, "slowest") }}
+  {% else %}<p class="empty">{{ _("No request matches this filter.") }}</p>{% endif %}
+</section>
+{% endif %}
 {% endif %}

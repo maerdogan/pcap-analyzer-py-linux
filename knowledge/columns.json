@@ -97,5 +97,16 @@
   "syn_seen": "SYN seen",
   "challenge_ack": "SYN answered with an ACK",
   "grpc_status": "gRPC status",
-  "grpc_message": "gRPC message"
+  "grpc_message": "gRPC message",
+  "tls_chain": "Certificate chain",
+  "tls_client_cert_requested": "Client certificate asked for",
+  "tls_client_certs": "Client certificates sent",
+  "tls_client_name": "Client certificate name",
+  "proxy_version": "PROXY protocol",
+  "proxy_client": "Client before the proxy",
+  "proxy_server": "Address the client asked for",
+  "ns_pcb": "NetScaler PCB",
+  "ns_linked_pcb": "Linked NetScaler PCB",
+  "ns_rtt_ms": "Round trip by the NetScaler, ms",
+  "ns_peer": "Other side on the NetScaler"
 }

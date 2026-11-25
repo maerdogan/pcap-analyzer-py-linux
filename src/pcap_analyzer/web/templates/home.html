@@ -1,10 +1,11 @@
 {% extends "base.html" %}
+{% import "_macros.html" as ui with context %}
 {% block title %}{{ _("Captures") }}{% endblock %}
 {% block main %}
 <header class="page-head"><div><h1>{{ _("Captures") }}</h1><p class="muted">{{ _("Upload a capture, or open one you analyzed earlier.") }}</p></div></header>
 <div class="columns">
   <section class="panel flush">
-    <div class="section-head"><h2>{{ _("Analyzed captures") }}</h2>{% if analyses %}<span class="hint">{{ _("Kept for {n} days. Everyone with the login sees this list.", n=ttl) }}</span>{% endif %}</div>
+    <div class="section-head"><h2>{{ _("Analyzed captures") }}</h2>{% if analyses %}<span class="hint">{{ _("Kept until nobody opened them for {n} days. You see the captures of your group.", n=ttl) }}</span>{% endif %}</div>
     <form class="list-search" method="get" action="/" role="search"><input type="search" id="q" name="q" value="{{ search }}" aria-label="{{ _("Search files, cases, tags and notes") }}" placeholder="{{ _("Search files, cases, tags and notes") }}"></form>
     {% if analyses %}
     <ol class="captures">
@@ -19,12 +20,13 @@
           <div><dt>{{ _("Connections") }}</dt><dd>{{ m.connections }}</dd></div>
           <div><dt>{{ _("Requests") }}</dt><dd>{{ m.transactions }}</dd></div>
         </dl>
-        <form method="post" action="/a/{{ m.id }}/delete"><input type="hidden" name="csrf_token" value="{{ form_token() }}"><button class="link danger" aria-label="{{ _("Delete {name}", name=m.filename) }}">{{ _("Delete") }}</button></form>
+        {% if me().can("analyst") and me().may_delete(m) %}<form method="post" action="/a/{{ m.id }}/delete"><input type="hidden" name="csrf_token" value="{{ form_token() }}"><button class="link danger" aria-label="{{ _("Delete {name}", name=m.filename) }}">{{ _("Delete") }}</button></form>{% endif %}
       </li>
       {% endfor %}
     </ol>
     {% else %}<p class="empty">{{ _("Nothing here yet. Upload a capture above to see where its time went.") }}</p>{% endif %}
   </section>
+  {% if me().can("analyst") %}
   <section class="panel">
     <h2>{{ _("Analyze a capture") }}</h2>
     <form hx-post="/upload" hx-encoding="multipart/form-data" hx-target="#job" hx-swap="innerHTML" hx-disabled-elt="find button.primary">
@@ -39,7 +41,8 @@
       <details>
         <summary>{{ _("Decrypt HTTPS") }}</summary>
         <div class="fields">
-          <label>{{ _("TLS key log file") }} <input type="file" name="keylog"></label>
+          <label>{{ _("TLS key log file") }} <input type="file" name="keylog" multiple>
+            <span class="hint">{{ _("Select one or more. Give the key logs of both sides of a proxy, such as NetScaler, to decrypt both.") }}</span></label>
           <label>{{ _("RSA private key") }} <input type="file" name="rsa_key"></label>
         </div>
         <p class="hint">{{ _("A key log works for all modern TLS. An RSA key only reads old RSA key exchange. Keys are removed after the analysis.") }}</p>
@@ -52,7 +55,7 @@
           <label>{{ _("TCP port") }} <input name="port" inputmode="numeric"></label>
           <label>{{ _("From") }} <input name="start" type="datetime-local" step="1"></label>
           <label>{{ _("Until") }} <input name="end" type="datetime-local" step="1"></label>
-          <label class="wide">{{ _("Wireshark display filter") }} <input name="display_filter" spellcheck="false" placeholder="http.host contains &quot;example&quot;"></label>
+          <label class="wide">{{ _("Wireshark display filter") }} {{ ui.display_filter("display_filter") }}</label>
           <label class="wide">{{ _("Decode As") }} <input name="decode_as" spellcheck="false" placeholder="tcp.port==9000,http; udp.port==4433,quic">
             <span class="hint">{{ _("Read a port as another protocol, as Wireshark's Decode As does. Separate rules with ;") }}</span></label>
         </div>
@@ -61,5 +64,6 @@
     </form>
     <div id="job" aria-live="polite"></div>
   </section>
+  {% endif %}
 </div>
 {% endblock %}

@@ -50,7 +50,7 @@ def server(tmp_path, samples):
 
 def _smoke(url, password, capture, *args):
     return subprocess.run([sys.executable, ROOT / "tools/smoke.py", url, capture, *args], capture_output=True, text=True,
-                          env=dict(os.environ, PCAP_ANALYZER_SMOKE_PASSWORD=password))
+                          env=dict(os.environ, PCAP_ANALYZER_SMOKE_PASSWORD=password, PCAP_ANALYZER_SMOKE_MASTER_KEY="Q7#mZ2!pL9x$Rt4w"))
 
 
 def test_smoke_walks_a_real_https_server(server, samples):

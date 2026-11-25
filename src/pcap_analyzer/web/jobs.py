@@ -20,6 +20,8 @@ class Job:
     error: str | None = None
     language: str | None = None
     limit: tshark.Limit | None = None
+    user: str = ""
+    group: str = ""  # a job is seen only by those who see the captures of its group
 
 
 class QueueFull(Exception):
@@ -33,11 +35,12 @@ class Jobs:
         self.jobs = {}
         self.lock = threading.Lock()
 
-    def submit(self, tmpdir, capture, filename, keylog, rsa_key, flt):
+    def submit(self, tmpdir, capture, filename, keylog, rsa_key, flt, owner=None):
+        owner = owner or {}
         with self.lock:
             if sum(j.state in ("waiting", "running") for j in self.jobs.values()) >= MAX_WAITING:
                 raise QueueFull
-            job = Job(uuid.uuid4().hex, filename, language=knowledge.language(), limit=tshark.Limit())
+            job = Job(uuid.uuid4().hex, filename, language=knowledge.language(), limit=tshark.Limit(), user=owner.get("user", ""), group=owner.get("group", ""))
             self.jobs[job.id] = job
         self.pool.submit(self._run, job, tmpdir, capture, keylog, rsa_key, flt)
         return job
@@ -50,7 +53,7 @@ class Jobs:
             limit.check()  # cancelled while waiting for a free slot
             job.state = "running"
             limit.start(self.settings.analysis_timeout_s)
-            a = engine.analyze(capture, keylog, rsa_key, flt, self.settings, display_name=job.filename, limit=limit)
+            a = engine.analyze(capture, keylog, rsa_key, flt, self.settings, display_name=job.filename, limit=limit, owner=dict(user=job.user, group=job.group))
             job.analysis_id = a.id
             state = "done"
         except tshark.Stopped as e:

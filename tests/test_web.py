@@ -1,5 +1,6 @@
 import gzip
-import json
+import html
+import os
 import re
 import time
 
@@ -9,6 +10,7 @@ from fastapi.testclient import TestClient
 from pcap_analyzer import engine
 from pcap_analyzer.web.app import create_app
 from pcap_analyzer.web.auth import FAIL_WINDOW_S, MAX_FAILS, MAX_TOTAL_FAILS, Auth, hash_password, verify_password
+from conftest import sign_in
 
 PW = "test-pass-for-unit-tests"
 
@@ -22,14 +24,12 @@ def anon(settings):
 
 @pytest.fixture
 def client(anon):
-    r = anon.post("/login", data={"username": "admin", "password": PW})
-    assert r.status_code == 303
-    anon.headers["X-CSRF-Token"] = form_token(anon)
-    return anon
+    return sign_in(anon, password=PW)
 
 
 def form_token(client):
-    return re.search(r'"X-CSRF-Token": "(\w+)"', client.get("/").text)[1]
+    """The password page is open to everyone signed in, also before the master key is set."""
+    return re.search(r'name="csrf_token" value="(\w+)"', client.get("/password").text)[1]
 
 
 def upload(client, path, extra_files=None, **form):
@@ -71,11 +71,12 @@ def test_first_sign_in_is_admin_admin_and_must_change(settings, configured):
         assert page.status_code == 200 and "first sign-in with the default password" in page.text
         token = re.search(r'name="csrf_token" value="(\w+)"', page.text)[1]
         bad = {"current": "admin", "new": "short", "again": "short", "csrf_token": token}
-        assert "at least 10 characters" in c.post("/password", data=bad).text
+        assert "at least 12 characters" in c.post("/password", data=bad).text
+        assert "at least 12 characters" in c.post("/password", data={**bad, "new": "eleven-char", "again": "eleven-char"}).text
         assert "do not match" in c.post("/password", data={**bad, "new": "a-long-new-pass-1", "again": "other-long-pass-2"}).text
         assert "current password is wrong" in c.post("/password", data={**bad, "current": "nope", "new": "a-long-new-pass-1", "again": "a-long-new-pass-1"}).text
-        assert c.post("/password", data={**bad, "new": "a-long-new-pass-1", "again": "a-long-new-pass-1"}).headers["location"] == "/"
-        assert c.get("/").status_code == 200
+        assert c.post("/password", data={**bad, "new": "a-long-new-pass-1", "again": "a-long-new-pass-1"}).headers["location"] == "/security"
+        assert c.get("/").headers["location"] == "/security"  # next the master key is set
         same = {**bad, "current": "a-long-new-pass-1", "new": "a-long-new-pass-1", "again": "a-long-new-pass-1"}
         assert "other than" in c.post("/password", data=same).text and "first sign-in" not in c.get("/password").text
     stored = settings.workdir / ".admin-password.json"
@@ -83,7 +84,7 @@ def test_first_sign_in_is_admin_admin_and_must_change(settings, configured):
     with TestClient(create_app(settings), follow_redirects=False, base_url="https://testserver") as again:  # a restart keeps the new password
         assert again.post("/login", data={"username": "admin", "password": "admin"}).status_code == 401
         r = again.post("/login", data={"username": "admin", "password": "a-long-new-pass-1"})
-        assert r.status_code == 303 and r.headers["location"] == "/"
+        assert r.status_code == 303 and r.headers["location"] == "/security"
 
 
 def test_password_change_needs_the_form_token(settings):
@@ -95,7 +96,7 @@ def test_password_change_needs_the_form_token(settings):
 
 def test_a_chosen_password_needs_no_change(anon):
     r = anon.post("/login", data={"username": "admin", "password": PW})
-    assert r.headers["location"] == "/" and anon.get("/").status_code == 200
+    assert r.headers["location"] == "/security"  # but the master key is set before anything else
 
 
 def test_invalid_hash_is_refused(settings):
@@ -150,8 +151,8 @@ def test_forwarded_header_is_ignored_without_trusted_proxy(anon):
 def test_cleanup_runs_at_startup(settings, samples):
     settings.admin_password = PW
     a = engine.analyze(samples / "http_scenarios.pcap", settings=settings)
-    meta = a.dir / "meta.json"
-    meta.write_text(json.dumps({**a.meta, "created": 0}))
+    old = time.time() - 8 * 86400  # nobody opened it for longer than the retention time
+    os.utime(a.dir / "meta.json", (old, old))
     with TestClient(create_app(settings)):
         for _ in range(100):
             if not a.dir.exists():
@@ -199,8 +200,8 @@ def test_a_wrong_file_gets_a_message_that_names_it(client, samples, field, conte
 
 @pytest.mark.parametrize("content, expected", [
     (b"\xd4\xc3\xb2\xa1" + bytes(10), ["cut short"]),  # tshark names the file in this message
-    # tshark 4.4 and later open this as a JSON file, 4.2 refuses it
-    (b"\x00\x01" * 500, ["no network packets", "format TShark understands"]),
+    # tshark 4.4 and later open this file as JSON, 4.2 refuses it, and read from the pipe of an encrypted data folder it ends early
+    (b"\x00\x01" * 500, ["no network packets", "format TShark understands", "cut short"]),
 ])
 def test_an_unreadable_capture_gets_a_plain_message(client, tmp_path, content, expected):
     (tmp_path / "c.cap").write_bytes(content)
@@ -344,9 +345,50 @@ def test_keylog_upload(client, samples):
     assert "/secure/report/{id}" in str(client.get(home.replace("/a/", "/api/a/") + "/urls").json())
 
 
-def test_display_filter_rejected_with_message(client, samples):
-    text = upload(client, samples / "http_scenarios.pcap", display_filter="not a ) filter")
-    assert 'class="error"' in text
+def test_several_key_logs_upload(client, samples):
+    files = [("capture", ("c.pcap", (samples / "https_h2.pcap").read_bytes()))] + [
+        ("keylog", (p.name, p.read_bytes())) for p in (samples / "https_tls13.keylog", samples / "https_h2.keylog")]
+    r = client.post("/upload", files=files)
+    assert r.status_code == 200, r.text
+    jid = re.search(r"/jobs/([0-9a-f]+)", r.text)[1]
+    for _ in range(300):
+        s = client.get(f"/jobs/{jid}")
+        if "HX-Redirect" in s.headers:
+            break
+        time.sleep(0.05)
+    home = s.headers["HX-Redirect"]
+    assert len(client.get(home.replace("/a/", "/api/a/") + "/urls").json()) > 0
+    assert 'name="keylog" multiple' in client.get("/").text
+
+
+def test_proxy_and_gateway_facts_on_pages(client, made):
+    home = upload(client, made("proxy"))
+    conn = client.get(f"{home}/conn/0").text
+    assert "PROXY protocol" in conn and "203.0.113.7:40000" in conn and "198.51.100.10:443" in conn
+    pages = [client.get(f"{home}/txn/{i}").text for i in (1, 2, 3)]
+    assert any("203.0.113.7:40000 (PROXY v2)" in p for p in pages)
+    assert any("Upstream time reported by the gateway" in p and "Time in the gateway itself" in p for p in pages)
+
+
+@pytest.mark.parametrize("typed", ["not a ) filter", "frame.len > 0", "tcp.port == 80"])
+def test_only_a_preset_display_filter_is_accepted(client, samples, typed):
+    r = client.post("/upload", files={"capture": ("a.pcap", (samples / "http_scenarios.pcap").read_bytes())}, data={"display_filter": typed})
+    assert r.status_code == 400 and "Choose a display filter from the list." in r.text
+    htmx = client.post("/upload", files={"capture": ("a.pcap", b"x")}, data={"display_filter": typed}, headers={"HX-Request": "true"})
+    assert 'class="error"' in htmx.text
+
+
+def test_a_preset_display_filter_analyzes(client, samples):
+    home = upload(client, samples / "http_scenarios.pcap", display_filter="http || http2")
+    assert home.startswith("/a/") and "(http || http2)" in client.get("/").text
+
+
+def test_the_display_filter_is_a_list_of_presets(client, samples):
+    from pcap_analyzer.display_filters import PRESETS
+    page = client.get("/").text
+    assert '<select name="display_filter">' in page and 'name="display_filter" spellcheck' not in page
+    assert len(PRESETS) == 18 and all(f'value="{html.escape(v)}"' in page for v in PRESETS)
+    assert ">TCP retransmissions<" in page and ">All packets<" in page
 
 
 def test_bad_ip_rejected(client, samples):
@@ -383,6 +425,9 @@ def test_compare_page(client, samples):
     assert "Summary" in p
     p = client.get("/compare", params=dict(a=a, b=b, mode="points")).text
     assert "2 matched by request ID" in p and "/api/b/3" in p
+    p = client.get("/compare", params=dict(a=a, b=b, mode="points", offset_ms="1,5")).text
+    assert "The clock difference you gave is used" in p and "1.5 ms" in p
+    assert client.get("/compare", params=dict(a=a, b=b, mode="points", offset_ms="soon")).status_code == 400
     assert client.get("/compare", params=dict(a=a, b="0" * 20)).status_code == 404
 
 
@@ -453,3 +498,11 @@ def test_captures_are_listed_by_day(client, samples):
     upload(client, samples / "http_scenarios.pcap")
     upload(client, samples / "http_scenarios.pcap")
     assert client.get("/").text.count('class="day"') == 1
+
+
+def test_static_files_carry_their_change_time(client):
+    from pcap_analyzer import __version__
+    page = client.get("/").text
+    css, js = re.search(r'app\.css\?v=([\w.]+)"', page)[1], re.search(r'app\.js\?v=([\w.]+)"', page)[1]
+    assert css == js and css.startswith(__version__ + ".") and len(css) > len(__version__) + 1
+    assert 'logo-on-dark.png" alt="" width="196" height="45"' in page

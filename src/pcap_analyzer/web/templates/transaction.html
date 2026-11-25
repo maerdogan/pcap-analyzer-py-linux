@@ -28,6 +28,10 @@
   <dl class="facts">
     <div><dt>{{ _("Status") }}</dt><dd>{{ t.status or _("No reply") }}{% if t.phrase %} {{ t.phrase }}{% endif %}</dd></div>
     <div><dt>{{ _("Protocol") }}</dt><dd>{{ t.http_version }}</dd></div>
+    {% if t.health_check %}<div><dt>{{ _("Health check") }}</dt><dd>{{ _("Yes") }}</dd></div>{% endif %}
+    {% if t.retry_of is defined and t.retry_of is not none %}<div><dt>{{ _("Retry") }}</dt><dd><a href="/a/{{ a.id }}/txn/{{ t.retry_of }}">{{ _("Attempt {n}, after request {id}", n=t.attempt, id=t.retry_of) }}</a></dd></div>{% endif %}
+    {% if t.upstream_time is defined and t.upstream_time is not none %}<div><dt>{{ _("Upstream time reported by the gateway") }}</dt><dd>{{ t.upstream_time | seconds }}</dd></div>
+    {% if t.gateway_time is not none %}<div><dt>{{ _("Time in the gateway itself") }}</dt><dd>{{ t.gateway_time | seconds }}</dd></div>{% endif %}{% endif %}
     {% if t.grpc_status is defined and t.grpc_status is not none %}<div><dt>{{ _("gRPC status") }}</dt><dd>{{ t.grpc_status }}{% if t.grpc_message %} {{ t.grpc_message }}{% endif %}</dd></div>{% endif %}
     <div><dt>{{ _("Total") }}</dt><dd>{{ t.total | seconds }}</dd></div>
     <div><dt>{{ _("First byte") }}</dt><dd>{{ t.ttfb | seconds }}</dd></div>
@@ -40,7 +44,8 @@
     {% if t.server_reported is not none %}<div><dt>{{ _("Server reported") }}</dt><dd>{{ t.server_reported | seconds }}</dd></div>{% endif %}
     {% if t.content_encoding %}<div><dt>{{ _("Compression") }}</dt><dd>{{ t.content_encoding }}</dd></div>{% endif %}
     {% if t.transfer_encoding %}<div><dt>{{ _("Transfer encoding") }}</dt><dd>{{ t.transfer_encoding }}</dd></div>{% endif %}
-    {% if t.x_forwarded_for %}<div><dt>{{ _("Original client") }}</dt><dd>{{ t.x_forwarded_for }}</dd></div>{% endif %}
+    {% if t.original_client %}<div><dt>{{ _("Original client") }}</dt><dd>{{ t.original_client }} ({{ t.original_client_from }})</dd></div>
+    {% elif t.x_forwarded_for %}<div><dt>{{ _("Original client") }}</dt><dd>{{ t.x_forwarded_for }}</dd></div>{% endif %}
     {% if t.request_id %}<div><dt>{{ _("Request ID") }}</dt><dd>{{ t.request_id }}</dd></div>{% endif %}
     <div><dt>{{ _("Packets") }}</dt><dd>{{ t.req_frame }}–{{ t.resp_frame or t.req_frame }}</dd></div>
   </dl>

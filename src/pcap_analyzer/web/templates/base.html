@@ -9,11 +9,11 @@
   <link rel="icon" href="/static/brand/favicon.png" type="image/png">
   <link rel="stylesheet" href="/static/vendor/ag-grid.min.css">
   <link rel="stylesheet" href="/static/vendor/ag-theme-quartz.min.css">
-  <link rel="stylesheet" href="/static/app.css?v={{ version }}">
+  <link rel="stylesheet" href="/static/app.css?v={{ assets }}">
   <script src="/static/vendor/htmx.min.js" defer></script>
   <script src="/static/vendor/ag-grid.min.js" defer></script>
   <script src="/static/vendor/echarts.min.js" defer></script>
-  <script src="/static/app.js?v={{ version }}" defer></script>
+  <script src="/static/app.js?v={{ assets }}" defer></script>
 </head>
 <body class="app" data-words='{{ js_words() | tojson }}' hx-headers='{"X-CSRF-Token": "{{ form_token() }}"}'>
   <a class="skip" href="#main">{{ _("Skip to content") }}</a>
@@ -21,7 +21,7 @@
   {% set recent = recent_captures() %}
   <aside class="side" id="side">
     <a class="side-brand" href="/" aria-label="pcap-analyzer">
-      <img src="/static/brand/logo-on-dark.png" alt="" width="176" height="64">
+      <img src="/static/brand/logo-on-dark.png" alt="" width="196" height="45">
     </a>
     <div class="side-scroll">
       <nav class="side-group" aria-label="{{ _("Main") }}">
@@ -30,7 +30,19 @@
         <a href="/compare" {% if section == "compare" %}aria-current="page"{% endif %}>{{ ui.icon("compare") }}<span>{{ _("Compare") }}</span></a>
         <a href="/trend" {% if section == "trend" %}aria-current="page"{% endif %}>{{ ui.icon("trend") }}<span>{{ _("Trend") }}</span></a>
         <a href="/capture-guide" {% if section == "guide" %}aria-current="page"{% endif %}>{{ ui.icon("guide") }}<span>{{ _("Capture guide") }}</span></a>
-        <a href="/preferences" {% if section == "preferences" %}aria-current="page"{% endif %}>{{ ui.icon("preferences") }}<span>{{ _("Preferences") }}</span></a>
+        {% set who = me() %}
+        <details class="side-sub" {% if section in ("preferences", "users", "security", "password", "audit") %}open{% endif %}>
+          <summary>{{ ui.icon("preferences") }}<span>{{ _("Settings") }}</span></summary>
+          {% if who and who.can("admin") %}
+          <a href="/preferences" {% if section == "preferences" %}aria-current="page"{% endif %}><span>{{ _("Preferences") }}</span></a>
+          <a href="/users" {% if section == "users" %}aria-current="page"{% endif %}><span>{{ _("Users") }}</span></a>
+          <a href="/security" {% if section == "security" %}aria-current="page"{% endif %}><span>{{ _("Encryption") }}</span></a>
+          {% endif %}
+          <a href="/password" {% if section == "password" %}aria-current="page"{% endif %}><span>{{ _("Password") }}</span></a>
+          {% if who and who.can("admin") %}
+          <a href="/audit" {% if section == "audit" %}aria-current="page"{% endif %}><span>{{ _("Activity log") }}</span></a>
+          {% endif %}
+        </details>
       </nav>
       {% block capture_nav %}{% endblock %}
       {% if recent %}
@@ -52,11 +64,16 @@
       <button type="button" class="icon-button nav-toggle" aria-controls="side" aria-expanded="false" data-nav-toggle>{{ ui.icon("menu") }}<span class="sr">{{ _("Menu") }}</span></button>
       {% if capture_views | trim and a %}{{ ui.capsearch(a) }}{% endif %}
       <div class="top-end">
+        {% if me() %}<span class="who" title="{{ me().full_name or me().name }}">{{ me().name }} · {{ role_labels()[me().role] }}</span>{% endif %}
         {{ ui.language_form(request) }}
         <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ form_token() }}"><button class="ghost">{{ ui.icon("logout") }}<span>{{ _("Sign out") }}</span></button></form>
       </div>
     </header>
-    <main class="page" id="main">{% block main %}{% endblock %}</main>
+    <main class="page" id="main">
+      {% set changed = file_alerts() %}
+      {% if changed and section != "security" %}<p class="warn" role="alert"><b>{{ _("{n} files were changed by hand in the data folder.", n=changed | length) }}</b> <a href="/security">{{ _("See which") }}</a></p>{% endif %}
+      {% block main %}{% endblock %}
+    </main>
   </div>
 </body>
 </html>

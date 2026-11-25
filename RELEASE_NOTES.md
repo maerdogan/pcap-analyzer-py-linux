@@ -2,6 +2,41 @@
 
 All changes made on the same day are one minor version.
 
+## Unreleased
+
+### Added
+
+- HTTP/2 between a gateway and its backend: flow control waits are a phase of their own and an issue, and stream resets (RST_STREAM) and GOAWAY are issues with their error names.
+- Several TLS key logs per analysis, such as the client to NetScaler leg and the NetScaler to gateway leg; the CLI takes `--keylog` more than once.
+- NetScaler traces (nstrace) are accepted as captures; the two legs of the NetScaler are linked by their PCB numbers, with the NetScaler's own round trip.
+- Certificate chain length and the first certificate to expire; mutual TLS: whether the server asked for a client certificate, and the issue "client certificate asked for but not sent".
+- PROXY protocol v1 and v2: the client before the proxy, per connection and request.
+- The original client from a list of headers, `PCAP_ANALYZER_CLIENT_IP_HEADER`, then from PROXY protocol.
+- Envoy's `x-envoy-upstream-service-time`: the upstream time and the gateway's own time per request.
+- Health checks by path and user agent (`PCAP_ANALYZER_HEALTH_PATHS` adds paths), and requests sent again after a failed attempt, as an issue.
+- Compare at two points: the drift of the two clocks is estimated and taken out, and a known clock difference can be given.
+- Users, groups and roles. An admin adds groups and users under Settings → Users: user name, full name, employee ID, group, and the role viewer (opens and exports), analyst (also uploads, deletes own captures, notes, saved filters) or admin (also users, preferences, tokens, the activity log and encryption). Users sign in with a local password or through LDAP, with the group and role from the app. A role that may not do something gets 403.
+- Groups keep their captures apart: each capture records its uploader and group, and a user sees only the captures of their own group on every page, export, comparison, trend, baseline and REST call, including jobs; others answer 404. Admins see every group. Only the uploader or an admin may delete a capture.
+- Encryption at rest, the design of the Java edition: every file in the data folder is encrypted with its own AES-256-GCM key in 1 MiB segments, keys are wrapped with RSA-2048, the data key is sealed with a 16-character master key and the master key with the setup admin's password. Analysis databases use DuckDB's own encryption. After a restart nothing opens until the setup admin signs in; others see a waiting page. The setup admin sets the master key on Settings → Encryption at the first sign-in, which encrypts what is already there, and can show and change it later.
+- Files changed, cut, left plain or brought from another install are found when read and by an hourly check, and admins see a notice on every page.
+- The REST API takes a user's name and password as well as tokens, and a token can be made for one group.
+
+### Changed
+
+- The first sign-in still is admin / admin, then the master key. A password in PCAP_ANALYZER_ADMIN_PASSWORD or PCAP_ANALYZER_ADMIN_PASSWORD_HASH is taken over once into the data folder and can be removed from the settings.
+- Passwords need at least 12 characters, for everyone.
+- The activity log is kept encrypted, line by line, in a file whose name says nothing about it, and records who did what.
+- An analysis is deleted when nobody opened it for PCAP_ANALYZER_TTL_DAYS days, counting from its last view rather than from its upload.
+- Uploads wait in a private folder inside the data folder rather than in /tmp, and tshark reads encrypted captures through a pipe.
+- The web interface has a new look with the PCAP Analyzer logo. The sections, the views of the open capture and the recent captures sit in a dark side menu; the URL search, language and sign out sit in a bar at the top. On narrow screens the side menu opens with a menu button.
+- Pages use softer, less bright backgrounds, and tables have clearer column titles. Text keeps at least 4.5:1 contrast.
+- The explanation on a request and an issue page spreads over the page in columns: the first sentence of what it means, what this capture shows and three checks. The rest, the common misreading and the sources open on demand.
+- Wireshark display filters on the upload form, the IO graph and the flow graph are picked from a list of presets, such as TLS handshakes, DNS errors or TCP retransmissions, and are no longer typed. The server takes only these: an upload with another filter is refused, and the graphs then show all packets. The command line still takes any filter.
+- Inspect traffic lists all traffic the filter selects, most requests first, in pages of 30.
+- The slowest requests on Inspect traffic can be filtered by text in the request, the status class (2xx to 5xx, or no response) and a duration range in milliseconds, keeping the page's other filters. A duration range lists every match, in pages of 30.
+- Inspect traffic shows each URL over time: its phases stacked per time bucket, the 95th percentile as a dashed line and the requests and failed requests as bars below, beside where its average time went, including the round trips on both sides of the capture point and the gateway's upstream time. Selecting a row in the URL table switches to that URL.
+- Holding the pointer over a slow request shows where its time went.
+
 ## 0.8.0 (2026-11-17)
 
 ### Added
@@ -13,11 +48,29 @@ All changes made on the same day are one minor version.
 - A request page lists the packets of that request alone: the connection setup when the request opened it, the request, the response and its acknowledgment.
 - `ROADMAP.md` lists every roadmap item with its stage, area and state.
 
+### Added
+
+- Users, groups and roles. An admin adds groups and users under Settings → Users: user name, full name, employee ID, group, and the role viewer (opens and exports), analyst (also uploads, deletes own captures, notes, saved filters) or admin (also users, preferences, tokens, the activity log and encryption). Users sign in with a local password or through LDAP, with the group and role from the app. A role that may not do something gets 403.
+- Groups keep their captures apart: each capture records its uploader and group, and a user sees only the captures of their own group on every page, export, comparison, trend, baseline and REST call, including jobs; others answer 404. Admins see every group. Only the uploader or an admin may delete a capture.
+- Encryption at rest, the design of the Java edition: every file in the data folder is encrypted with its own AES-256-GCM key in 1 MiB segments, keys are wrapped with RSA-2048, the data key is sealed with a 16-character master key and the master key with the setup admin's password. Analysis databases use DuckDB's own encryption. After a restart nothing opens until the setup admin signs in; others see a waiting page. The setup admin sets the master key on Settings → Encryption at the first sign-in, which encrypts what is already there, and can show and change it later.
+- Files changed, cut, left plain or brought from another install are found when read and by an hourly check, and admins see a notice on every page.
+- The REST API takes a user's name and password as well as tokens, and a token can be made for one group.
+
 ### Changed
 
+- The first sign-in still is admin / admin, then the master key. A password in PCAP_ANALYZER_ADMIN_PASSWORD or PCAP_ANALYZER_ADMIN_PASSWORD_HASH is taken over once into the data folder and can be removed from the settings.
+- Passwords need at least 12 characters, for everyone.
+- The activity log is kept encrypted, line by line, in a file whose name says nothing about it, and records who did what.
+- An analysis is deleted when nobody opened it for PCAP_ANALYZER_TTL_DAYS days, counting from its last view rather than from its upload.
+- Uploads wait in a private folder inside the data folder rather than in /tmp, and tshark reads encrypted captures through a pipe.
 - The web interface has a new look with the PCAP Analyzer logo. The sections, the views of the open capture and the recent captures sit in a dark side menu; the URL search, language and sign out sit in a bar at the top. On narrow screens the side menu opens with a menu button.
 - Pages use softer, less bright backgrounds, and tables have clearer column titles. Text keeps at least 4.5:1 contrast.
 - The explanation on a request and an issue page spreads over the page in columns: the first sentence of what it means, what this capture shows and three checks. The rest, the common misreading and the sources open on demand.
+- Wireshark display filters on the upload form, the IO graph and the flow graph are picked from a list of presets, such as TLS handshakes, DNS errors or TCP retransmissions, and are no longer typed. The server takes only these: an upload with another filter is refused, and the graphs then show all packets. The command line still takes any filter.
+- Inspect traffic lists all traffic the filter selects, most requests first, in pages of 30.
+- The slowest requests on Inspect traffic can be filtered by text in the request, the status class (2xx to 5xx, or no response) and a duration range in milliseconds, keeping the page's other filters. A duration range lists every match, in pages of 30.
+- Inspect traffic shows each URL over time: its phases stacked per time bucket, the 95th percentile as a dashed line and the requests and failed requests as bars below, beside where its average time went, including the round trips on both sides of the capture point and the gateway's upstream time. Selecting a row in the URL table switches to that URL.
+- Holding the pointer over a slow request shows where its time went.
 
 ## 0.7.6 (2026-11-16)
 

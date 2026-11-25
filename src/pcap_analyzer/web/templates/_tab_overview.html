@@ -48,6 +48,7 @@
     {% if o.http.requests %}<section class="panel"><h2>{{ _("Status codes") }}</h2><div class="chart" data-chart="statuses" data-src="/api/a/{{ a.id }}/statuses" data-name="status-codes"></div></section>{% endif %}
     <section class="panel">
       <h2>{{ _("Case and notes") }}</h2>
+      {% if not me().can("analyst") %}<p>{{ notes.case }} {{ notes.tags }}</p><p>{{ notes.note }}</p>{% else %}
       <form method="post" action="/a/{{ a.id }}/notes">
         <input type="hidden" name="csrf_token" value="{{ form_token() }}">
         <div class="fields">
@@ -57,6 +58,7 @@
         </div>
         <button>{{ _("Save notes") }}</button>
       </form>
+      {% endif %}
     </section>
     <section class="panel">
       <h2>{{ _("TCP") }}</h2>

@@ -12,6 +12,7 @@ PORT=${PCAP_ANALYZER_PORT:-8000}
 WORK=$(mktemp -d)
 PASSWORD=$(head -c 18 /dev/urandom | base64 | tr -d '/+=')
 export PCAP_ANALYZER_SMOKE_PASSWORD=$PASSWORD
+export PCAP_ANALYZER_SMOKE_MASTER_KEY='Smoke#Master-Key'  # the first sign-in sets it, which encrypts the data folder
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -43,7 +44,7 @@ image_check() {
     (cd "$WORK/app" && python3 start-pcap-analyzer.py cli list >/dev/null)
   fi
   chmod -R a+rX "$WORK"
-  docker run --rm --network none --user 1000:1000 --tmpfs /tmp:exec,mode=1777 -e HOME=/tmp -e PCAP_ANALYZER_SMOKE_PASSWORD \
+  docker run --rm --network none --user 1000:1000 --tmpfs /tmp:exec,mode=1777 -e HOME=/tmp -e PCAP_ANALYZER_SMOKE_PASSWORD -e PCAP_ANALYZER_SMOKE_MASTER_KEY \
     -e PYTHON_KIND="$python" -e PORT="$PORT" -v "$WORK:/work:ro" "$image" sh -c '
     set -e
     getconf GNU_LIBC_VERSION

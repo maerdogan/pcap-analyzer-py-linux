@@ -43,6 +43,18 @@ SYN_COPY_S = 0.5  # Linux sends SYN and SYN-ACK with IP ID 0 and resends them af
 NO_BODY_METHODS = ("HEAD", "CONNECT")
 NO_BODY_STATUS = (204, 304)
 TRACEPARENT = re.compile(r"[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}")
+# HTTP/2 error codes, RFC 9113 section 7
+H2_ERRORS = ("NO_ERROR", "PROTOCOL_ERROR", "INTERNAL_ERROR", "FLOW_CONTROL_ERROR", "SETTINGS_TIMEOUT", "STREAM_CLOSED", "FRAME_SIZE_ERROR",
+             "REFUSED_STREAM", "CANCEL", "COMPRESSION_ERROR", "CONNECT_ERROR", "ENHANCE_YOUR_CALM", "INADEQUATE_SECURITY", "HTTP_1_1_REQUIRED")
+H2_DEFAULT_WINDOW = 65_535
+H2_LOW_WINDOW = 1_024  # with less than this left, a sender waits for the peer's WINDOW_UPDATE
+H2_STALL_MIN_S = 0.001
+SETTINGS_INITIAL_WINDOW_SIZE = 4
+CLIENT_IP_HEADERS = "x-forwarded-for,x-real-ip,true-client-ip,x-client-ip,client-ip,forwarded"
+FORWARDED_FOR = re.compile(r'(?:^|;)\s*for="?([^";]+)', re.I)
+HEALTH_PATHS = ("/health", "/healthz", "/healthcheck", "/health-check", "/ready", "/readyz", "/livez", "/ping", "/status", "/actuator/health", "/q/health")
+HEALTH_AGENT = re.compile(r"monitor|kube-probe|health.?check|NetScaler|ELB-HealthChecker|GoogleHC|Consul Health|Envoy/HC", re.I)
+PREFIXED_HEALTH = re.compile(r"health|ready|live")
 
 
 def many(p, key):
@@ -102,6 +114,64 @@ def request_id(get):
         return named
     m = TRACEPARENT.fullmatch((get("traceparent") or "").strip().lower())
     return m[1] if m else None
+
+
+def h2_error(code):
+    """The name of an HTTP/2 error code, or its number in hex."""
+    if code is None:
+        return None
+    return H2_ERRORS[code] if 0 <= code < len(H2_ERRORS) else f"0x{code:x}"
+
+
+def client_ip_headers():
+    """Headers a proxy writes the original client into, in the order they are tried. PCAP_ANALYZER_CLIENT_IP_HEADER sets them, comma separated."""
+    names = os.environ.get("PCAP_ANALYZER_CLIENT_IP_HEADER", "").strip() or CLIENT_IP_HEADERS
+    return [n for n in names.lower().replace(" ", "").split(",") if n]
+
+
+def client_address(name, value):
+    """The original client in a header value: the first address of a list, and the for= part of a Forwarded header."""
+    if value is None:
+        return None
+    v = value.split(",")[0].strip()
+    if name == "forwarded":
+        m = FORWARDED_FOR.search(v)
+        v = m[1] if m else ""
+    return None if not v or v.lower() == "unknown" else v
+
+
+def original_client(get):
+    """(address, header) from the first configured header that names a client, or (None, None)."""
+    for name in client_ip_headers():
+        ip = client_address(name, get(name))
+        if ip:
+            return ip, name
+    return None, None
+
+
+def health_paths():
+    """Paths of load balancer and Kubernetes health checks. PCAP_ANALYZER_HEALTH_PATHS adds paths, comma separated."""
+    more = os.environ.get("PCAP_ANALYZER_HEALTH_PATHS", "")
+    return HEALTH_PATHS + tuple(p.strip().lower() for p in more.split(",") if p.strip())
+
+
+def health_check(uri, user_agent):
+    """True for a request a load balancer or Kubernetes sends to see whether the service is up."""
+    if user_agent and HEALTH_AGENT.search(user_agent):
+        return True
+    if not uri:
+        return False
+    path = uri.split("?", 1)[0].lower()
+    if len(path) > 1 and path.endswith("/"):
+        path = path[:-1]
+    # A service prefix is fine for health and readiness paths, as in /orders/healthz; /ping and /status only on their own
+    return any(path == h or path.endswith(h) and PREFIXED_HEALTH.search(h) for h in health_paths())
+
+
+def envoy_upstream(value):
+    """x-envoy-upstream-service-time: the milliseconds an Envoy based gateway waited for its upstream, in seconds."""
+    ms = to_float((value or "").strip())
+    return ms / 1000 if ms is not None and ms >= 0 else None
 
 
 def masked_headers(pairs):
@@ -190,6 +260,22 @@ class Stream:
     last_syn: float = 0.0
     tls_ccs: Packet | None = None  # the client's ChangeCipherSpec: unencrypted, and sent with its Finished
     challenged: bool = False  # the server answered a SYN with a plain ACK
+    tls_cert_requested: bool = False  # the server sent CertificateRequest: mutual TLS
+    tls_chain: int = 0  # certificates the server sent
+    tls_client_certs: int | None = None
+    tls_client_name: str | None = None
+    proxy_version: str | None = None  # a PROXY protocol header before the data names the client the proxy took the connection from
+    proxy_client: str | None = None
+    proxy_server: str | None = None
+    ns_pcb: int | None = None  # a NetScaler trace names the connection's PCB and the PCB of the other leg of the proxy
+    ns_linked_pcb: int | None = None
+    ns_rtt: int | None = None
+    # HTTP/2 flow control: what each side may still send on the connection and on each stream, as its peer allowed
+    h2_conn_window: dict = field(default_factory=dict)  # sender: bytes
+    h2_initial_window: dict = field(default_factory=dict)  # sender: per stream window its peer's SETTINGS gave it
+    h2_stream_window: dict = field(default_factory=dict)  # (sender, stream): bytes
+    h2_blocked: dict = field(default_factory=dict)  # (sender, stream or 0): when its window ran out
+    h2_stalls: list = field(default_factory=list)  # (start, end) of each flow control wait
 
 
 def nat_views(views, order):
@@ -289,6 +375,7 @@ class Builder:
             s = self.streams[sid] = Stream(sid, src, dst)
         flags = to_int(p["tcp.flags"]) or 0
         payload = to_int(p["tcp.len"]) or 0
+        self._netscaler(p, s)
         if self._is_copy(p, s, t, src, flags, payload):
             self.copies += 1
             s.no_rtt.add(frame)
@@ -334,9 +421,37 @@ class Builder:
         rtt = to_float(p.get("tcp.analysis.ack_rtt"))
         if rtt is not None and to_int(p.get("tcp.analysis.acks_frame")) not in s.no_rtt:  # Karn: an ACK of a sent-twice segment times neither
             s.pending_rtt.append((src, rtt))
+        self._proxy(p, s)
         self._tls(p, s, pk, src, ctypes)
         self._http1(p, s, pk, src, dst)
         self._http2(p, s, pk, src, dst)
+
+    @staticmethod
+    def _netscaler(p, s):
+        """A NetScaler trace names the connection's PCB, the PCB of the other side of the proxy, and the NetScaler's own round trip in ms."""
+        if s.ns_pcb is None:
+            s.ns_pcb = to_int(first(p, "nstrace.pdevno")) or None
+        if s.ns_linked_pcb is None:
+            s.ns_linked_pcb = to_int(first(p, "nstrace.l_pdevno")) or None
+        rtt = to_int(first(p, "nstrace.tcpdbg.rtrtt") or first(p, "nstrace.rtt"))
+        if rtt and rtt > 0:
+            s.ns_rtt = rtt
+
+    @staticmethod
+    def _proxy(p, s):
+        """A PROXY protocol header, as a NetScaler or a load balancer puts in front of the data, names the client the proxy took the connection from."""
+        version = first(p, "proxy.version") or ("1" if p.get("proxy.v1.magic") else None)
+        if version is None or s.proxy_version is not None:
+            return
+        s.proxy_version = f"v{version}"
+
+        def endpoint(side):
+            ip = first(p, f"proxy.{side}.ipv4") or first(p, f"proxy.{side}.ipv6")
+            port = first(p, f"proxy.{side}port")
+            if ip is None:
+                return None
+            return (f"[{ip}]" if ":" in ip else ip) + (f":{port}" if port else "")
+        s.proxy_client, s.proxy_server = endpoint("src"), endpoint("dst")
 
     @staticmethod
     def _is_copy(p, s, t, src, flags, payload):
@@ -406,9 +521,21 @@ class Builder:
         alert = to_int(first(p, "tls.alert_message.desc"))
         if alert not in (None, 0) and s.tls_alert is None:
             s.tls_alert = ALERTS.get(alert, str(alert))
-        times = many(p, "x509af.utcTime")
-        if len(times) >= 2 and s.tls_cert_expires is None:  # the first certificate is the server's, with its start and end
-            s.tls_cert_expires = times[1]
+        from_client = src == s.client
+        if 13 in hs and not from_client:
+            s.tls_cert_requested = True
+        if 11 in hs:
+            certs = len(many(p, "tls.handshake.certificate_length"))
+            if from_client:
+                s.tls_client_certs, s.tls_client_name = certs, first(p, "x509ce.dNSName")
+                if s.tls_cert_requested and not certs:
+                    self.issue(p, pk.t, "tls_no_client_cert", s.sni or f"stream {s.sid}")
+            elif not s.tls_chain:
+                s.tls_chain = certs
+                # notBefore and notAfter of each certificate in turn: the chain expires with its first certificate to expire
+                ends = many(p, "x509af.utcTime")[1::2]
+                if ends:
+                    s.tls_cert_expires = min(ends)
 
     def _http1(self, p, s, pk, src, dst):
         segs = sorted({int(x) for k in ("tcp.segment", "tls.segment") for x in many(p, k)})
@@ -421,11 +548,14 @@ class Builder:
             bodies = many(p, "http.file_data")
             s.client = s.client or src
             for i, m in enumerate(methods):
+                get = lambda name, i=i: nth_header(lines, name, i)  # noqa: E731
+                client_ip, client_ip_from = original_client(get)
                 s.requests.append(dict(
                     frame=pk.frame, start_frame=min(segs + [pk.frame]), method=m,
                     uri=uris[i] if i < len(uris) else None, host=hosts[i] if i < len(hosts) else None,
                     version=versions[i] if i < len(versions) else "HTTP/1.1",
-                    xff=first(p, "http.x_forwarded_for"), request_id=request_id(lambda name: nth_header(lines, name, i)),
+                    xff=first(p, "http.x_forwarded_for"), request_id=request_id(get), client_ip=client_ip, client_ip_from=client_ip_from,
+                    user_agent=get("user-agent"),
                     content_length=to_int(first(p, "http.content_length")), headers=masked_headers(line_pairs(lines)),
                     body=preview(bodies[0]) if bodies else None))
             s.req_end = pk.seq + pk.payload
@@ -451,7 +581,8 @@ class Builder:
                     content_length=to_int(lengths[i]) if i < len(lengths) else None,
                     content_type=first(p, "http.content_type"), encoding=first(p, "http.content_encoding"),
                     transfer=first(p, "http.transfer_encoding"), server_timing=header(lines, "server-timing"),
-                    response_time=header(lines, "x-response-time"), headers=masked_headers(line_pairs(lines)),
+                    response_time=header(lines, "x-response-time"), upstream_time=envoy_upstream(header(lines, "x-envoy-upstream-service-time")),
+                    headers=masked_headers(line_pairs(lines)),
                     websocket=(header(lines, "upgrade") or "").lower() == "websocket",
                     head_len=head_len, body=preview(bodies[0]) if bodies else None))
             s.resp_end = pk.seq + pk.payload
@@ -466,6 +597,7 @@ class Builder:
         if not types:
             return
         ids, flags, lengths = many(p, "http2.streamid"), many(p, "http2.flags"), many(p, "http2.length")
+        self._h2_control(p, s, pk, src, dst, types, ids, lengths)
         counts = [int(x) for x in many(p, "http2.header.count")]
         names, values = many(p, "http2.header.name"), many(p, "http2.header.value")
         hpos = cpos = 0
@@ -501,6 +633,53 @@ class Builder:
                 st["last_s"] = pk
             if fl & 1:
                 st["c_end" if is_client else "s_end"] = pk
+
+
+    def _h2_control(self, p, s, pk, src, dst, types, ids, lengths):
+        """Resets and shutdowns become issues, and flow control windows are followed from SETTINGS, DATA and WINDOW_UPDATE
+        to find a sender that ran out and waited for its peer to open the window again."""
+        rst, goaway = iter(many(p, "http2.rst_stream.error")), iter(many(p, "http2.goaway.error"))
+        increments = iter(many(p, "http2.window_update.window_size_increment"))
+        windows = iter(many(p, "http2.settings.initial_window_size"))
+        for setting in many(p, "http2.settings.id"):
+            if to_int(setting) == SETTINGS_INITIAL_WINDOW_SIZE:
+                v = to_int(next(windows, None))
+                if v is not None:
+                    s.h2_initial_window[dst] = v  # what the sender of SETTINGS lets the other side send on each stream
+        for i, ty in enumerate(types):
+            sid2 = (to_int(ids[i]) if i < len(ids) else 0) or 0
+            if ty == "3":
+                code = next(rst, None)
+                if code is not None:
+                    self.issue(p, pk.t, "h2_reset", f"stream {sid2}: {h2_error(to_int(code))}")
+            elif ty == "7":
+                code = next(goaway, None)
+                if code is not None:
+                    self.issue(p, pk.t, "h2_goaway", h2_error(to_int(code)))
+            elif ty == "8":
+                add = to_int(next(increments, None))
+                if add is None:
+                    continue
+                key = (dst, sid2)  # the peer of this frame's sender may send more now
+                if sid2 == 0:
+                    s.h2_conn_window[dst] = s.h2_conn_window.get(dst, H2_DEFAULT_WINDOW) + add
+                else:
+                    s.h2_stream_window[key] = s.h2_stream_window.get(key, s.h2_initial_window.get(dst, H2_DEFAULT_WINDOW)) + add
+                since = s.h2_blocked.pop(key, None)
+                if since is not None and pk.t - since >= H2_STALL_MIN_S:
+                    s.h2_stalls.append((since, pk.t))
+                    self.issue(p, pk.t, "h2_flow_stall", f"{'connection' if sid2 == 0 else f'stream {sid2}'}: {round((pk.t - since) * 1000)} ms")
+            elif ty == "0" and sid2:
+                ln = to_int(lengths[i]) if i < len(lengths) else None
+                if not ln:
+                    continue
+                conn = s.h2_conn_window[src] = s.h2_conn_window.get(src, H2_DEFAULT_WINDOW) - ln
+                key = (src, sid2)
+                stream = s.h2_stream_window[key] = s.h2_stream_window.get(key, s.h2_initial_window.get(src, H2_DEFAULT_WINDOW)) - ln
+                if conn < H2_LOW_WINDOW:
+                    s.h2_blocked.setdefault((src, 0), pk.t)
+                if stream < H2_LOW_WINDOW:
+                    s.h2_blocked.setdefault(key, pk.t)
 
 
 def pick_rtt(handshake, samples):
@@ -561,7 +740,10 @@ def finish_stream(s, slow_s=causes.SLOW_S):
         byte_ratio_db=_ratio_db(pay_c, pay_s), offload=s.offload, one_way=len({p.src for p in s.packets}) == 1,
         tls_cipher=s.tls_cipher, tls_alpn=s.tls_alpn, tls_alert=s.tls_alert, tls_no_answer=s.tls_hello and not s.tls_server_hello,
         tls_resumed=s.tls_server_hello and not s.tls_certificate if s.tls_version != "TLS 1.3" else None, tls_cert_expires=s.tls_cert_expires,
-        tls_unread=_tls_unread(s, client), syn_seen=s.syn is not None, challenge_ack=s.challenged and s.synack is None)
+        tls_unread=_tls_unread(s, client), syn_seen=s.syn is not None, challenge_ack=s.challenged and s.synack is None,
+        tls_chain=s.tls_chain or None, tls_client_cert_requested=s.tls_cert_requested, tls_client_certs=s.tls_client_certs, tls_client_name=s.tls_client_name,
+        proxy_version=s.proxy_version, proxy_client=s.proxy_client, proxy_server=s.proxy_server,
+        ns_pcb=s.ns_pcb, ns_linked_pcb=s.ns_linked_pcb, ns_rtt_ms=s.ns_rtt)
     _enrich(s, client, txns, conn, slow_s)
     return conn, txns
 
@@ -636,7 +818,12 @@ def _enrich(s, client, txns, conn, slow_s):
             t["service"] = svc if svc >= 0 else None
         if t["queue_time"] and t["service"] is None:
             t["service"] = 0.0
-        moved = retrans + zero + delayed_resp
+        flow = 0.0
+        if t["resp_start"] is not None and t["resp_end"] is not None:  # HTTP/2 flow control waits while the response was sent
+            flow = sum(max(0.0, min(end, t["resp_end"]) - max(start, t["resp_start"])) for start, end in s.h2_stalls)
+            flow = min(flow, max(_or0(t["transfer"]) - retrans - zero - delayed_resp, 0.0))
+        t["h2_flow_time"] = flow
+        moved = retrans + zero + delayed_resp + flow
         t["transfer_clean"] = max(_or0(t["transfer"]) - moved, 0.0)
         t["request_clean"] = max(t["request_send"] - delayed_req - max(moved - _or0(t["transfer"]), 0.0), 0.0)
         if t["head_len"] is not None:
@@ -647,6 +834,8 @@ def _enrich(s, client, txns, conn, slow_s):
         t["truncated"] = bool(t["answered"] and clen and t["body_expected"] and t["body_bytes"] is not None
                               and t["body_bytes"] < clen and not conn["kind"].startswith("HTTPS"))
         t["server_reported"] = causes.parse_server_timing(t["server_timing"])
+        # An Envoy gateway says how long its upstream took; the rest of what the capture saw as service is the gateway's own time
+        t["gateway_time"] = max(t["service"] - t["upstream_time"], 0.0) if t["upstream_time"] is not None and t["service"] is not None else None
         t["cause"], t["cause_share"], flags = causes.classify(t, conn, slow_s)
         t["flags"] = ",".join(flags)
 
@@ -691,8 +880,9 @@ def _h1_transactions(s, client, rtt_srv):
                         r and r["content_type"], r and r["encoding"], r and r["transfer"], r and (r["server_timing"] or _rt(r)),
                         q["xff"], q["request_id"], None))
         out[-1].update(req_headers=q["headers"], resp_headers=r and r["headers"], req_body=q["body"], resp_body=r and r["body"],
-                       head_len=r and r["head_len"], last_frame=r_last.frame if r_last else None,
-                       body_expected=bool(r) and q["method"] not in NO_BODY_METHODS and r["status"] not in NO_BODY_STATUS)
+                       head_len=r and r["head_len"], last_frame=r_last.frame if r_last else None, upstream_time=r and r["upstream_time"],
+                       body_expected=bool(r) and q["method"] not in NO_BODY_METHODS and r["status"] not in NO_BODY_STATUS,
+                       **_client(s, q["uri"], q["user_agent"], q["client_ip"], q["client_ip_from"]))
     return out
 
 
@@ -722,8 +912,17 @@ def _h2_transactions(s, client, rtt_srv):
                         q.get("x-forwarded-for"), request_id(q.get), sid2))
         out[-1].update(req_headers=_h2_headers(q), resp_headers=_h2_headers(r) if r else None, req_body=None, resp_body=None,
                        head_len=None, last_frame=r_last.frame if r_last else None, grpc_status=st["grpc"], grpc_message=st["grpc_message"],
-                       body_expected=bool(r) and q.get(":method") not in NO_BODY_METHODS)
+                       body_expected=bool(r) and q.get(":method") not in NO_BODY_METHODS, upstream_time=envoy_upstream((r or {}).get("x-envoy-upstream-service-time")),
+                       **_client(s, q.get(":path"), q.get("user-agent"), *original_client(q.get)))
     return out
+
+
+def _client(s, uri, user_agent, client_ip, client_ip_from):
+    """Who sent a request: the original client from a configured header first, then from a PROXY protocol header, and whether it is a health check."""
+    if client_ip is None and s.proxy_client:
+        client_ip, client_ip_from = s.proxy_client, f"PROXY {s.proxy_version}"
+    return dict(proxy_client=s.proxy_client, original_client=client_ip, original_client_from=client_ip_from, user_agent=user_agent,
+                health_check=health_check(uri, user_agent))
 
 
 def _h2_headers(h):

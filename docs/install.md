@@ -63,17 +63,19 @@ runtime/python/bin/python3 tools/smoke.py http://127.0.0.1:8000 capture.pcap
 | `PCAP_ANALYZER_PORT` | `8000` | Port |
 | `PCAP_ANALYZER_CERT`, `PCAP_ANALYZER_KEY` | | Certificate and key files, to serve HTTPS |
 | `PCAP_ANALYZER_ADMIN_USER` | `admin` | Login name |
-| `PCAP_ANALYZER_ADMIN_PASSWORD_HASH` | | Password hash, preferred |
-| `PCAP_ANALYZER_ADMIN_PASSWORD` | | Plain password, as the alternative. With neither set, or with the password `admin`, the first sign-in is `admin` / `admin` and every page asks for a new password first. The new password is kept in `.admin-password.json` in the data folder and wins over these settings; delete that file to go back to them |
+| `PCAP_ANALYZER_ADMIN_PASSWORD_HASH` | | A first password for the setup admin, as a hash from `pcap-analyzer hash-password`. Optional |
+| `PCAP_ANALYZER_ADMIN_PASSWORD` | | A first password in plain text, as the alternative. Optional. With neither set, or with the password `admin` or one under 12 characters, the first sign-in is `admin` / `admin` or that password, and every page asks for a new password first. Either is taken over once into `.admin-password.json` in the data folder, with a warning in the log to remove it from the settings, and is ignored from then on. Once the master key is set, that file is deleted: the admin password then only unwraps the admin key of the encrypted data folder |
 | `PCAP_ANALYZER_BEHIND_PROXY` | `0` | `1` when an HTTPS proxy is in front |
 | `PCAP_ANALYZER_HSTS_S` | `31536000` | How long browsers must use HTTPS, sent whenever HTTPS is on. `0` tells them to stop. Applies to the host name on every port |
 | `PCAP_ANALYZER_REQUEST_ID_HEADER` | `x-request-id` | Header that follows a request through proxies. `traceparent` is read when it is absent |
+| `PCAP_ANALYZER_CLIENT_IP_HEADER` | `x-forwarded-for,x-real-ip,true-client-ip,x-client-ip,client-ip,forwarded` | Headers that carry the original client, comma separated, tried in order. A PROXY protocol header is used when none has one. A NetScaler adds its own with *Client IP header* on the service |
+| `PCAP_ANALYZER_HEALTH_PATHS` | | More health check paths, comma separated, besides `/healthz`, `/ready`, `/actuator/health` and the like. Requests to them are marked as health checks |
 | `PCAP_ANALYZER_MERGECAP` | `mergecap` | Program that joins parts of a capture |
 | `PCAP_ANALYZER_SANDBOX` | on where possible | `0` stops running tshark in its own namespaces |
 | `PCAP_ANALYZER_TRUSTED_PROXIES` | | Proxy addresses or networks whose forwarded headers are believed, such as `10.0.0.5,10.1.0.0/16`. When empty, all users behind the proxy share one login lockout |
 | `PCAP_ANALYZER_WORKDIR` | `data/` in this folder | Where results are saved |
 | `PCAP_ANALYZER_MAX_SIZE_MB` | `1000` | Largest accepted capture. Captures over 100 MB are read in parts of whole connections |
-| `PCAP_ANALYZER_TTL_DAYS` | `7` | Days results are kept. The server removes older ones every hour |
+| `PCAP_ANALYZER_TTL_DAYS` | `7` | An analysis nobody opened for this many days is deleted, at start and every hour. One never opened counts from its upload |
 | `PCAP_ANALYZER_MAX_JOBS` | `2` | Analyses running at once |
 | `PCAP_ANALYZER_KEEP_CAPTURE` | `1` | Keep the capture for PCAP export, `0` to delete it after analysis. The Statistics tab, TCP graphs, Flow Graph, Follow Stream and Export Objects read the kept capture, so they need `1` |
 | `PCAP_ANALYZER_GEOIP_DIR` | none | A folder of MaxMind GeoLite2 `.mmdb` files. IP endpoints then show their country and AS number |

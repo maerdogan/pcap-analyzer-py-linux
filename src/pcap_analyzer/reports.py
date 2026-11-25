@@ -48,11 +48,25 @@ def one(db, sql, params=()):
     return got[0] if got else None
 
 
+def saved_columns(db, table):
+    """Columns of a saved table. An analysis saved by an older version lacks the newer ones."""
+    return {r[0] for r in db.execute(f"DESCRIBE {table}").fetchall()}
+
+
+def saved_phases(db):
+    """The phases an analysis recorded, in order."""
+    have = saved_columns(db, "http_transactions")
+    return [p for p in causes.PHASES if p in have]
+
+
 def overview(db, meta):
     http = one(db, f"SELECT {TIME_STATS} FROM http_transactions")
     tcp = one(db, """SELECT count(*) AS connections, count(*) FILTER (handshake_seen) AS handshakes,
         count(*) FILTER (close_type = 'RST') AS resets, avg(connect_time) AS avg_connect, avg(duration) AS avg_duration,
         avg(rtt_server) AS avg_rtt_server, sum(retransmissions) AS retransmissions FROM tcp_connections""")
+    have = saved_columns(db, "http_transactions")
+    if {"health_check", "retry_of"} <= have:
+        http.update(one(db, "SELECT count(*) FILTER (health_check) AS health_checks, count(*) FILTER (retry_of IS NOT NULL) AS retries FROM http_transactions"))
     return dict(
         meta=meta, http=http, tcp=tcp,
         kinds=rows(db, "SELECT kind, count(*) AS connections, sum(bytes) AS bytes FROM tcp_connections GROUP BY 1 ORDER BY 2 DESC"),
@@ -245,7 +259,55 @@ def txn_where(f):
     return " AND ".join(sql), params
 
 
-def inspect(db, f):
+SLOW_STATUSES = ("2xx", "3xx", "4xx", "5xx", "none")
+PAGE = 30
+SERIES_BUCKETS_S = (1, 5, 10, 30, 60, 300, 900, 1800, 3600, 21600, 86400)
+SERIES_POINTS = 120
+
+
+@dataclass(frozen=True)
+class Slow:
+    """Filter of the slowest requests list: text in the method, URL, host or status, a status class, and a duration range in milliseconds."""
+    text: str | None = None
+    status: str | None = None  # one of SLOW_STATUSES
+    min_ms: float | None = None
+    max_ms: float | None = None
+
+    @property
+    def ranged(self):
+        """A duration range lists every match, not only the slowest few."""
+        return self.min_ms is not None or self.max_ms is not None
+
+
+def slow_where(s):
+    sql, params = [], []
+    if s is None:
+        return sql, params
+    if s.text:
+        sql.append("contains(lower(concat_ws(' ', t.method, t.uri, t.host, CAST(t.status AS VARCHAR))), lower(?))")
+        params.append(s.text)
+    if s.status == "none":
+        sql.append("coalesce(t.status, 0) = 0")
+    elif s.status in SLOW_STATUSES:
+        sql.append("t.status // 100 = ?")
+        params.append(int(s.status[0]))
+    if s.min_ms is not None:
+        sql.append("t.total IS NOT NULL AND t.total * 1000 >= ?")
+        params.append(s.min_ms)
+    if s.max_ms is not None:
+        sql.append("t.total IS NOT NULL AND t.total * 1000 <= ?")
+        params.append(s.max_ms)
+    return sql, params
+
+
+def _page(n, page, size=None):
+    """The number of pages of n rows, and the page asked for kept inside them."""
+    size = size or PAGE
+    pages = max(1, -(-n // size))
+    return min(max(page or 1, 1), pages), pages
+
+
+def inspect(db, f, slow=None, slow_page=1):
     tw, tp = txn_where(f)
     cw, cp = conn_where(f)
     twhere = f" WHERE {tw}" if tw else ""
@@ -256,9 +318,67 @@ def inspect(db, f):
         count(*) FILTER (c.kind IN ('TCP', 'TLS')) AS tcp_only, count(*) FILTER (c.kind NOT IN ('TCP', 'TLS')) AS http,
         avg(c.connect_time) AS avg_connect, avg(c.duration) AS avg_duration, avg(c.rtt_server) AS avg_rtt
         FROM tcp_connections c{cwhere}""", cp)
+    sw, sp = slow_where(slow)
+    sw = " AND ".join(([tw] if tw else []) + sw)
+    sp = list(tp) + sp
+    matched = one(db, f"SELECT count(*) AS n {join}{' WHERE ' + sw if sw else ''}", sp)["n"]
+    if slow is not None and slow.ranged:
+        page, pages = _page(matched, slow_page)
+        listed, shown = matched, slowest(db, sw, sp, PAGE, (page - 1) * PAGE)
+    else:
+        page, pages = 1, 1
+        shown = slowest(db, sw, sp)
+        listed = len(shown)
+    urls = _groups(db, tw, tp)
+    views = url_views(db, tw, tp)
+    for u in urls:
+        u.update(views["urls"].get((u["method"], u["url"]), dict(series=[], breakdown={})))
     return dict(requests=stats, connections=conns,
                 causes=rows(db, f"SELECT t.cause, count(*) AS requests, avg(t.total) AS avg_total {join}{twhere} GROUP BY 1 ORDER BY 2 DESC", tp),
-                urls=_groups(db, tw, tp), slowest=slowest(db, tw, tp))
+                urls=urls, bucket=views["bucket"], slowest=shown, slow_matched=matched, slow_listed=listed, slow_page=page, slow_pages=pages)
+
+
+def url_views(db, tw="", tp=()):
+    """Each URL over time and where its time went. The series has one point per bucket with requests, the bucket wide enough for
+    at most SERIES_POINTS points: the requests, the failed ones, the average and 95th percentile total, and the average of each phase.
+    The breakdown averages each phase over all requests of the URL, so the phases add up to the average total, and the round trips
+    on both sides of the capture point over its connections."""
+    join = "FROM http_transactions t JOIN tcp_connections c USING (stream)"
+    where = f" WHERE {tw}" if tw else ""
+    span = one(db, f"SELECT min(t.req_start) AS lo, max(t.req_start) AS hi {join}{where}", tp)
+    if span["lo"] is None:
+        return dict(bucket=None, urls={})
+    lo = span["lo"]
+    width = next((b for b in SERIES_BUCKETS_S if (span["hi"] - lo) / b <= SERIES_POINTS), SERIES_BUCKETS_S[-1])
+    phases = saved_phases(db)
+    have = saved_columns(db, "http_transactions")
+    avg_phases = "".join(f", avg(coalesce(t.{p}, 0)) AS {p}" for p in phases)
+    key = "coalesce(t.method, '') AS method, coalesce(t.url_template, '') AS url"
+    out = {}
+    for r in rows(db, f"""SELECT {key}, CAST(floor((t.req_start - ?) / ?) AS BIGINT) AS slot, count(*) AS n,
+            count(*) FILTER (t.status >= 500 OR {UNANSWERED.format(t="t.")}) AS failed, avg(t.total) AS avg, quantile_cont(t.total, 0.95) AS p95{avg_phases}
+            {join}{where} GROUP BY 1, 2, 3 ORDER BY 3""", [lo, width] + list(tp)):
+        point = dict(t=lo + r["slot"] * width, n=r["n"], failed=r["failed"], avg=r["avg"], p95=r["p95"], phases={p: r[p] for p in phases if r[p]})
+        out.setdefault((r["method"], r["url"]), dict(series=[], breakdown={}))["series"].append(point)
+    gateway = "".join(f", avg(t.{k}) AS {k}" for k in ("upstream_time", "gateway_time") if k in have)
+    for r in rows(db, f"SELECT {key}{avg_phases}{gateway} {join}{where} GROUP BY 1, 2", tp):
+        out[(r["method"], r["url"])]["breakdown"].update({k: v for k, v in r.items() if k not in ("method", "url") and v})
+    for r in rows(db, f"""SELECT method, url, avg(rtt_client) AS rtt_client, avg(rtt_server) AS rtt_server FROM (
+            SELECT DISTINCT {key}, c.stream, c.rtt_client, c.rtt_server {join}{where}) GROUP BY 1, 2""", tp):
+        out[(r["method"], r["url"])]["breakdown"].update({k: r[k] for k in ("rtt_client", "rtt_server") if r[k]})
+    return dict(bucket=width, urls=out)
+
+
+def all_traffic(db, f, page=1):
+    """Every connection the filter selects, most requests first, one page of PAGE rows."""
+    cw, cp = conn_where(f)
+    where = f" WHERE {' AND '.join(cw)}" if cw else ""
+    total = one(db, f"SELECT count(*) AS n FROM tcp_connections c{where}", cp)["n"]
+    page, pages = _page(total, page)
+    got = rows(db, f"""SELECT c.stream, c.client_ip, c.client_port, c.server_ip, c.server_port, c.kind, c.packets, c.duration, c.closed_by, c.close_type,
+        count(t.id) AS requests FROM tcp_connections c LEFT JOIN http_transactions t USING (stream){where}
+        GROUP BY ALL ORDER BY requests DESC, c.packets DESC, c.stream LIMIT ? OFFSET ?""", cp + [PAGE, (page - 1) * PAGE])
+    return dict(rows=got, total=total, page=page, pages=pages)
 
 
 TOP_FLOWS = 10
@@ -278,11 +398,11 @@ def _groups(db, tw, tp):
                            f"AND id IN (SELECT t.id FROM http_transactions t JOIN tcp_connections c USING (stream) WHERE {tw})", tp + tp)) if tw else url_groups(db)
 
 
-def slowest(db, tw="", tp=(), limit=SLOWEST):
+def slowest(db, tw="", tp=(), limit=SLOWEST, offset=0):
     """Slowest requests with their explanation. Unanswered requests count by how long they waited."""
     where = f" WHERE {tw}" if tw else ""
     got = rows(db, f"""SELECT t.* FROM http_transactions t JOIN tcp_connections c USING (stream){where}
-        ORDER BY coalesce(t.total, c.end_time - t.req_end) DESC NULLS LAST LIMIT ?""", list(tp) + [limit])
+        ORDER BY coalesce(t.total, c.end_time - t.req_end) DESC NULLS LAST, t.id LIMIT ? OFFSET ?""", list(tp) + [limit, offset])
     return [describe(db, t) for t in got]
 
 
@@ -336,6 +456,7 @@ ISSUES = [
     ("loss", 2, "t.cause = 'loss'", None),
     ("retrans", 2, None, "c.retransmissions > 0"),
     ("slow_client", 2, "t.zero_window_time > 0", None),
+    ("retried", 2, "t.retry_of IS NOT NULL", None),
     ("delayed_ack", 3, "t.delayed_ack_time > 0", None),
     ("queueing", 3, "t.queue_time > 0", None),
     ("network", 3, "t.cause = 'network'", None),
@@ -351,6 +472,10 @@ PACKET_ISSUES = [
     ("port_reused", 2, "port_reused"),
     ("ecn_congestion", 3, "ecn_congestion"),
     ("sack_blocks", 3, "sack_blocks"),
+    ("h2_flow_stall", 2, "h2_flow_stall"),
+    ("h2_reset", 2, "h2_reset"),
+    ("h2_goaway", 2, "h2_goaway"),
+    ("tls_no_client_cert", 2, "tls_no_client_cert"),
 ]
 ISSUE_LIMIT = 200
 
@@ -443,7 +568,7 @@ DETAIL_LABELS = {
 
 def time_budget(db):
     """Total seconds spent in each phase, across all requests."""
-    t = one(db, f"""SELECT {', '.join(f'sum({p}) AS {p}' for p in causes.PHASES)} FROM http_transactions""")
+    t = one(db, f"""SELECT {', '.join(f'sum({p}) AS {p}' for p in saved_phases(db))} FROM http_transactions""")
     return [knowledge.phase(k, v) for k, v in t.items() if v]
 
 
@@ -524,10 +649,14 @@ def tls_health(db):
     except duckdb.BinderException:
         return None
     where = "WHERE tls_version IS NOT NULL OR tls_no_answer OR tls_alert IS NOT NULL"
+    mtls = "tls_client_cert_requested" in saved_columns(db, "tcp_connections")
     return dict(
         versions=rows(db, f"""SELECT coalesce(tls_version, '-') AS version, coalesce(tls_cipher, '-') AS cipher, coalesce(tls_alpn, '-') AS alpn, count(*) AS connections,
             count(*) FILTER (tls_resumed) AS resumed, avg(tls_time) AS avg_handshake FROM tcp_connections {where} GROUP BY 1, 2, 3 ORDER BY connections DESC"""),
         problems=rows(db, """SELECT stream, client_ip, client_port, server_ip, server_port, sni, tls_alert, tls_no_answer FROM tcp_connections
             WHERE tls_no_answer OR tls_alert IS NOT NULL ORDER BY stream LIMIT 200"""),
-        certificates=rows(db, """SELECT coalesce(sni, server_ip) AS name, tls_cert_expires AS expires, count(*) AS connections FROM tcp_connections
-            WHERE tls_cert_expires IS NOT NULL GROUP BY 1, 2 ORDER BY 2"""))
+        certificates=rows(db, f"""SELECT coalesce(sni, server_ip) AS name, tls_cert_expires AS expires, {'max(tls_chain)' if mtls else 'NULL'} AS chain,
+            count(*) AS connections FROM tcp_connections WHERE tls_cert_expires IS NOT NULL GROUP BY 1, 2 ORDER BY 2"""),
+        **(one(db, """SELECT count(*) FILTER (tls_client_cert_requested) AS client_cert_requested,
+            count(*) FILTER (tls_client_cert_requested AND tls_client_certs > 0) AS client_cert_sent FROM tcp_connections""") if mtls
+           else dict(client_cert_requested=0, client_cert_sent=0)))

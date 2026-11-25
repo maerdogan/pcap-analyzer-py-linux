@@ -47,11 +47,12 @@
     {% for f in filters %}
     <li>
       <a href="/a/{{ a.id }}/inspect?{% for k in ('src','src_port','dst','port','kind','url','min_size','size_of') %}{% if f[k] %}{{ k }}={{ f[k] | urlencode }}&amp;{% endif %}{% endfor %}">{{ f.name }}</a>
-      <form method="post" action="/filters/{{ f.id }}/delete"><input type="hidden" name="csrf_token" value="{{ form_token() }}"><input type="hidden" name="back" value="/a/{{ a.id }}/inspect"><button class="link danger" aria-label="{{ _("Delete filter {name}", name=f.name) }}">{{ _("Delete") }}</button></form>
+      {% if me().can("analyst") %}<form method="post" action="/filters/{{ f.id }}/delete"><input type="hidden" name="csrf_token" value="{{ form_token() }}"><input type="hidden" name="back" value="/a/{{ a.id }}/inspect"><button class="link danger" aria-label="{{ _("Delete filter {name}", name=f.name) }}">{{ _("Delete") }}</button></form>{% endif %}
     </li>
     {% endfor %}
   </ul>
   {% endif %}
+  {% if me().can("analyst") %}
   <details class="save">
     <summary>{{ _("Save this filter") }}</summary>
     <form method="post" action="/filters" class="inline">
@@ -63,6 +64,7 @@
     </form>
     <p class="hint">{{ _("Saves the filter as it was last applied.") }}</p>
   </details>
+  {% endif %}
 </div>
 </section>
 <div id="results">{% include "_inspect_results.html" %}</div>

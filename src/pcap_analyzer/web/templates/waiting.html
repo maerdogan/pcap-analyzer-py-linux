@@ -1,0 +1,18 @@
+{% import "_macros.html" as ui with context %}
+<!doctype html>
+<html lang="{{ lang() }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ _("Waiting for the admin") }}</title>
+  <link rel="stylesheet" href="/static/app.css?v={{ version }}">
+</head>
+<body class="login-page">
+  <main class="login">
+    <div class="login-mark">{{ ui.mark() }}</div>
+    <h1>{{ _("Waiting for the admin") }}</h1>
+    <p class="muted">{{ _("The data of this app is encrypted. After a restart, or before the first setup is done, it opens only when the admin signs in. Try again in a few minutes.") }}</p>
+    <p><a href="/login">{{ _("Sign in") }}</a></p>
+  </main>
+</body>
+</html>

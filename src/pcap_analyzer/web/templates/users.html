@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}{{ _("Users") }}{% endblock %}
+{% block main %}
+<header class="page-head"><div><h1>{{ _("Users") }}</h1><p class="muted">{{ _("Each user is in one group and sees only the captures uploaded in that group. Admins see every group.") }}</p></div></header>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if message %}<p class="{{ 'warn' if test_ok is false else 'good' }}" role="status">{{ message }}</p>{% endif %}
+<section class="panel">
+  <h2>{{ _("Roles") }}</h2>
+  <dl class="facts">
+    <div><dt>{{ role_labels().viewer }}</dt><dd>{{ _("Opens and exports captures.") }}</dd></div>
+    <div><dt>{{ role_labels().analyst }}</dt><dd>{{ _("Also uploads captures, deletes the ones they uploaded, writes notes and saves filters.") }}</dd></div>
+    <div><dt>{{ role_labels().admin }}</dt><dd>{{ _("Also manages users, preferences, API tokens, the activity log and encryption, and sees every group.") }}</dd></div>
+  </dl>
+</section>
+<section class="panel flush">
+  <h2 class="pad">{{ _("Groups") }}</h2>
+  {% if groups %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("Group") }}</th><th>{{ _("Description") }}</th><th class="num">{{ _("Users") }}</th><th></th></tr></thead>
+    <tbody>{% for g in groups %}<tr>
+      <td><code>{{ g.name }}</code></td>
+      <td><form method="post" action="/users/groups/{{ g.name }}/update" class="inline"><input type="hidden" name="csrf_token" value="{{ form_token() }}">
+        <input name="description" value="{{ g.description }}" maxlength="120" aria-label="{{ _("Description of {name}", name=g.name) }}"><button class="link">{{ _("Save") }}</button></form></td>
+      <td class="num">{{ g.users }}</td>
+      <td class="num">{% if not g.users %}<form method="post" action="/users/groups/{{ g.name }}/delete"><input type="hidden" name="csrf_token" value="{{ form_token() }}"><button class="link danger" aria-label="{{ _("Delete {name}", name=g.name) }}">{{ _("Delete") }}</button></form>{% endif %}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="empty">{{ _("No groups yet. Add one before adding users.") }}</p>{% endif %}
+  <form method="post" action="/users/groups" class="inline pad">
+    <input type="hidden" name="csrf_token" value="{{ form_token() }}">
+    <label>{{ _("Group name") }} <input name="group_name" required pattern="[a-z0-9][a-z0-9._\-]{1,39}" maxlength="40"></label>
+    <label>{{ _("Description") }} <input name="description" maxlength="120"></label>
+    <button>{{ _("Add group") }}</button>
+  </form>
+</section>
+<section class="panel flush">
+  <h2 class="pad">{{ _("Users") }}</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ _("User name") }}</th><th>{{ _("Full name") }}</th><th>{{ _("Employee ID") }}</th><th>{{ _("Group") }}</th><th>{{ _("Role") }}</th><th>{{ _("Sign-in") }}</th><th></th></tr></thead>
+    <tbody>
+      <tr><td><code>{{ setup_admin }}</code></td><td colspan="2" class="hint">{{ _("Setup admin, set in the server settings. It cannot be changed here.") }}</td><td>{{ _("All") }}</td><td>{{ role_labels().admin }}</td><td>{{ _("Local") }}</td><td></td></tr>
+      {% for u in users %}<tr>
+        <td><code>{{ u.name }}</code>{% if u.must_change %} <span class="hint">{{ _("must change the password") }}</span>{% endif %}</td>
+        <td colspan="4">
+          <form method="post" action="/users/{{ u.name }}/update" class="inline">
+            <input type="hidden" name="csrf_token" value="{{ form_token() }}">
+            <input name="full_name" value="{{ u.full_name }}" maxlength="80" required aria-label="{{ _("Full name") }}">
+            <input name="employee_id" value="{{ u.employee_id }}" maxlength="30" aria-label="{{ _("Employee ID") }}">
+            <select name="group" aria-label="{{ _("Group") }}">{% for g in groups %}<option {% if g.name == u.group %}selected{% endif %}>{{ g.name }}</option>{% endfor %}</select>
+            <select name="role" aria-label="{{ _("Role") }}">{% for r in roles %}<option value="{{ r }}" {% if r == u.role %}selected{% endif %}>{{ role_labels()[r] }}</option>{% endfor %}</select>
+            <button class="link">{{ _("Save") }}</button>
+          </form>
+        </td>
+        <td>{{ "LDAP" if u.source == "ldap" else _("Local") }}</td>
+        <td class="num">
+          {% if u.source != "ldap" %}
+          <details><summary class="link">{{ _("Reset password") }}</summary>
+            <form method="post" action="/users/{{ u.name }}/password" class="inline">
+              <input type="hidden" name="csrf_token" value="{{ form_token() }}">
+              <input name="password" type="password" minlength="{{ min_password }}" required autocomplete="new-password" aria-label="{{ _("New password") }}">
+              <button>{{ _("Reset") }}</button>
+            </form>
+          </details>
+          {% endif %}
+          <form method="post" action="/users/{{ u.name }}/delete"><input type="hidden" name="csrf_token" value="{{ form_token() }}"><button class="link danger" aria-label="{{ _("Delete {name}", name=u.name) }}">{{ _("Delete") }}</button></form>
+        </td>
+      </tr>{% endfor %}
+    </tbody>
+  </table></div>
+  {% if groups %}
+  <form method="post" action="/users" class="pad">
+    <input type="hidden" name="csrf_token" value="{{ form_token() }}">
+    <h3>{{ _("Add a user") }}</h3>
+    <div class="fields">
+      <label>{{ _("User name") }} <input name="name" required pattern="[a-z0-9][a-z0-9._\-]{1,39}" maxlength="40" autocomplete="off"></label>
+      <label>{{ _("Full name") }} <input name="full_name" required maxlength="80"></label>
+      <label>{{ _("Employee ID") }} <input name="employee_id" maxlength="30"></label>
+      <label>{{ _("Group") }} <select name="group" required>{% for g in groups %}<option>{{ g.name }}</option>{% endfor %}</select></label>
+      <label>{{ _("Role") }} <select name="role">{% for r in roles %}<option value="{{ r }}">{{ role_labels()[r] }}</option>{% endfor %}</select></label>
+      <label>{{ _("Sign-in") }} <select name="source"><option value="local">{{ _("Local") }}</option>{% if ldap_ready %}<option value="ldap">LDAP</option>{% endif %}</select></label>
+      <label>{{ _("First password") }} <input name="password" type="password" minlength="{{ min_password }}" autocomplete="new-password"></label>
+    </div>
+    <p class="hint">{{ _("A local user chooses a new password at the first sign-in. Passwords need at least {n} characters. An LDAP user signs in with the directory password.", n=min_password) }}</p>
+    <button class="primary">{{ _("Add user") }}</button>
+  </form>
+  {% endif %}
+</section>
+<section class="panel">
+  <h2>LDAP</h2>
+  <p class="muted">{{ _("Users marked as LDAP sign in with their directory password. The app finds them with the service account, then signs in as them. Their group and role are set here.") }}</p>
+  <form method="post" action="/users/ldap">
+    <input type="hidden" name="csrf_token" value="{{ form_token() }}">
+    <div class="fields">
+      <label>{{ _("Server") }} <input name="url" value="{{ ldap.url }}" placeholder="ldaps://dc.example.com:636" spellcheck="false"></label>
+      <label>{{ _("Service account DN") }} <input name="bind_dn" value="{{ ldap.bind_dn }}" placeholder="CN=svc-pcap,OU=Service,DC=example,DC=com" spellcheck="false"></label>
+      <label>{{ _("Service account password") }} <input name="bind_password" type="password" autocomplete="new-password" placeholder="{{ _("unchanged") if ldap.bind_password else '' }}"></label>
+      <label>{{ _("Base DN") }} <input name="base_dn" value="{{ ldap.base_dn }}" placeholder="DC=example,DC=com" spellcheck="false"></label>
+      <label>{{ _("User filter") }} <input name="user_filter" value="{{ ldap.user_filter }}" placeholder="(sAMAccountName={0})" spellcheck="false"></label>
+    </div>
+    <p class="hint">{{ _("{0} in the filter is replaced by the user name, with the characters that would change the filter escaped. The settings are kept encrypted.") }}</p>
+    <button class="primary">{{ _("Save LDAP settings") }}</button>
+  </form>
+  <form method="post" action="/users/ldap/test" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ form_token() }}">
+    <label>{{ _("User to find (optional)") }} <input name="test_user" maxlength="80"></label>
+    <button>{{ _("Test the connection") }}</button>
+  </form>
+</section>
+{% endblock %}
