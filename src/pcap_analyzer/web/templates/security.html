@@ -42,7 +42,7 @@
 <section class="panel">
   <h2>{{ _("How the data is encrypted") }}</h2>
   <ul>{% for line in algorithm %}<li>{{ line }}</li>{% endfor %}</ul>
-  {% if not native %}<p class="warn">{{ _("This DuckDB cannot encrypt databases itself, so each analysis database is encrypted as a whole file and opened from a private plain copy while it is read.") }}</p>{% endif %}
+  {% if not native %}<p class="hint">{{ _("This DuckDB cannot encrypt databases itself, so each analysis database is encrypted as a whole file and opened from a private plain copy while it is read.") }}</p>{% endif %}
   <p class="hint">{{ _("After a restart nothing can be read until the setup admin signs in. Until then other users see a waiting page. Every hour, and whenever a file is read, the data folder is checked for files that were changed, cut, put there by hand or left unencrypted.") }}</p>
 </section>
 {% endblock %}

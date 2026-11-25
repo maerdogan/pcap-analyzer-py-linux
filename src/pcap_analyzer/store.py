@@ -171,7 +171,21 @@ def set_values(db, table, key, cols, rows, folder):
 
 
 KEY_FILE = "db.key"
-NATIVE_ENCRYPTION = tuple(int(x) for x in duckdb.__version__.split(".")[:2]) >= (1, 4)
+def _secure_native_encryption():
+    """DuckDB 1.4+ encrypts a database itself, but writes it securely only with OpenSSL from its httpfs extension;
+    without it, it refuses, or writes with an unsafe fallback. httpfs is used only when it is already installed here:
+    nothing is downloaded, since most installs have no internet. Otherwise the vault encrypts the whole file."""
+    if tuple(int(v) for v in duckdb.__version__.split(".")[:2]) < (1, 4):
+        return False
+    try:
+        with duckdb.connect(config={"autoinstall_known_extensions": False}) as db:
+            db.execute("LOAD httpfs")
+        return True
+    except duckdb.Error:
+        return False
+
+
+NATIVE_ENCRYPTION = _secure_native_encryption()
 RAM_FOLDER = Path("/dev/shm")
 
 
@@ -213,7 +227,9 @@ class _Decrypted:
     """A database the vault encrypted whole, for a DuckDB without encryption: read from a plain copy in a private folder, in memory where the system has one."""
 
     def __init__(self, path):
-        base = RAM_FOLDER if RAM_FOLDER.is_dir() and os.access(RAM_FOLDER, os.W_OK) else None
+        # memory when there is room: a container's /dev/shm is often only 64 MB
+        need = path.stat().st_size * 1.2 + (16 << 20)
+        base = RAM_FOLDER if RAM_FOLDER.is_dir() and os.access(RAM_FOLDER, os.W_OK) and shutil.disk_usage(RAM_FOLDER).free > need else None
         self.folder = tempfile.mkdtemp(prefix="pcap-analyzer-db-", dir=base)
         copy = Path(self.folder) / "analysis.duckdb"
         try:

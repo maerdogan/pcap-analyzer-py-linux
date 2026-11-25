@@ -80,6 +80,8 @@ class Auth:
 
     def _adopt(self, password, password_hash):
         """Take over a password from the settings once, or start with admin / admin."""
+        # an empty line such as PCAP_ANALYZER_ADMIN_PASSWORD= in an env file means no password, not an empty one
+        password = password or None
         saved = self._saved()
         given = password is not None or bool(password_hash)
         if self._encrypted() or saved:

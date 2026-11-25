@@ -393,3 +393,12 @@ def test_opening_an_analysis_marks_it_seen(site, samples):
     os.utime(seen, (week, week))
     os.utime(seen.parent / "meta.json", (week, week))
     assert engine.purge(site["settings"]) == 1, "the retention job runs while the vault is locked too, from file times alone"
+
+
+def test_empty_password_line_does_not_win_over_the_hash(tmp_path):
+    """An env file with PCAP_ANALYZER_ADMIN_PASSWORD= left empty and a hash set: the hash is the password."""
+    from pcap_analyzer.web.auth import Auth, hash_password
+    a = Auth("admin", password="", password_hash=hash_password("From-The-Hash-1"), store=tmp_path / ".admin-password.json")
+    assert a.check("admin", "From-The-Hash-1")
+    assert not a.check("admin", "")
+    assert not a.must_change

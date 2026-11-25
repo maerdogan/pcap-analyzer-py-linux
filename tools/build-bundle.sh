@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build bundle/ on a Linux x86_64 machine with internet. Needs curl, tar and sha256sum, but not sudo.
+# Build bundle/ on a Linux x86_64 machine with internet. Needs curl, tar, sha256sum and objdump, but not sudo.
 # The bundle holds Python, the Python packages and tshark. The application runs from src/, so it is not in here.
 # Build again only when a Python package, Python or tshark changes.
 set -euo pipefail
@@ -34,6 +34,18 @@ for dep in tomllib.load(open(sys.argv[1], "rb"))["project"]["dependencies"]:
     if not dep.startswith("duckdb"):
         print(dep)' "$ROOT/pyproject.toml" >"$WORK/requirements.txt"
 "$OUT/python/bin/python3" -m pip install -q --no-warn-script-location "duckdb==$DUCKDB" -r "$WORK/requirements.txt"
+# pip picks the newest build its host can run, which may need a newer glibc than the servers have.
+# Packages with compiled code must run on glibc 2.17 (CentOS 7), so they get their manylinux2014 build.
+for pkg in cryptography cffi; do
+  ver=$("$OUT/python/bin/python3" -c 'import sys, importlib.metadata as m; print(m.version(sys.argv[1]))' "$pkg")
+  "$OUT/python/bin/python3" -m pip download -q --no-deps --only-binary=:all: --platform manylinux2014_x86_64 \
+    --python-version 3.13 --implementation cp "$pkg==$ver" -d "$WORK/wheels"
+done
+"$OUT/python/bin/python3" -m pip install -q --no-warn-script-location --no-deps --force-reinstall "$WORK"/wheels/*.whl
+# Refuse a bundle that would not start on old servers: nothing but DuckDB (swapped on glibc 2.17) may need more than glibc 2.17.
+too_new=$(find "$OUT/python/lib" -name '*.so*' ! -name '_duckdb*' -type f -exec sh -c '
+  objdump -T "$1" 2>/dev/null | grep -o "GLIBC_2\.[0-9]*" | sort -t. -k2 -n | tail -1 | grep -qE "GLIBC_2\.(1[89]|[2-9][0-9])" && echo "$1"' _ {} \;)
+[[ -z $too_new ]] || { echo "error: these need a glibc newer than 2.17:" >&2; echo "$too_new" >&2; exit 1; }
 
 echo "Installing tshark..."
 T=$WORK/alpine
