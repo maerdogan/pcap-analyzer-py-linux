@@ -47,7 +47,8 @@ def test_set_up_encrypts_what_is_there(life):
         assert f.read(100) == life["big"][2 * vault.SEGMENT + 7:2 * vault.SEGMENT + 107]
     assert vault.size(wd / AID / "capture") == len(life["big"])
     assert b"secret-word" not in (wd / AID / "analysis.duckdb").read_bytes()
-    assert vault.is_encrypted(wd / AID / store.KEY_FILE)
+    # with httpfs DuckDB encrypts the database and its key is kept encrypted beside it; without, the vault encrypts the file
+    assert vault.is_encrypted(wd / AID / store.KEY_FILE) if store.NATIVE_ENCRYPTION else vault.is_encrypted(wd / AID / "analysis.duckdb")
     with store.connect(wd / AID / "analysis.duckdb") as db:
         assert db.execute("SELECT s FROM t").fetchone()[0] == "secret-word"
     assert [r["event"] for r in records.read_audit(Settings(workdir=wd))] == ["upload"]
@@ -138,7 +139,7 @@ def test_an_old_duckdb_gets_the_database_encrypted_as_a_file(settings, samples, 
 def test_an_analysis_made_after_the_setup_is_encrypted_from_the_start(settings, samples):
     vault.of(settings.workdir).set_up(ADMIN, MASTER)
     a = engine.analyze(samples / "http_scenarios.pcap", settings=settings)
-    for name in ("meta.json", "capture", store.KEY_FILE):
+    for name in ("meta.json", "capture", store.KEY_FILE if store.NATIVE_ENCRYPTION else "analysis.duckdb"):
         assert vault.is_encrypted(a.dir / name), name
     with pytest.raises(duckdb.Error):
         duckdb.connect(str(a.db_path), read_only=True)

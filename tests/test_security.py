@@ -145,7 +145,7 @@ def test_first_run_admin_admin_then_master_key_then_everything_is_encrypted(sett
         done = c.post("/security", data=dict(master=MASTER, again=MASTER, password=ADMIN, csrf_token=token))
         assert "now encrypted" in done.text
         assert not (settings.workdir / ".admin-password.json").exists(), "the admin password now lives only in the admin key"
-        for name in ("meta.json", "capture", store.KEY_FILE):
+        for name in ("meta.json", "capture", store.KEY_FILE if store.NATIVE_ENCRYPTION else "analysis.duckdb"):
             assert vault.is_encrypted(old.dir / name), name
         with pytest.raises(duckdb.Error):
             duckdb.connect(str(old.dir / "analysis.duckdb"), read_only=True)
