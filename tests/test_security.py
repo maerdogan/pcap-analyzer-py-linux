@@ -402,3 +402,13 @@ def test_empty_password_line_does_not_win_over_the_hash(tmp_path):
     assert a.check("admin", "From-The-Hash-1")
     assert not a.check("admin", "")
     assert not a.must_change
+
+
+def test_ldap_address_takes_any_port_or_none():
+    from pcap_analyzer.web import directory
+    ok = ("ldaps://dc.example.com", "ldaps://dc.example.com:3269", "ldap://10.0.0.5:10389/", "ldaps://[2001:db8::1]:636")
+    bad = ("ldaps://dc:0", "ldaps://dc:65536", "dc.example.com", "ldaps://a b", "http://dc.example.com")
+    for url in ok:
+        assert directory.problem(dict(url=url, user_filter="(uid={0})")) is None, url
+    for url in bad:
+        assert directory.problem(dict(url=url, user_filter="(uid={0})")) is not None, url

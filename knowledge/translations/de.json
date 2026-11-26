@@ -1143,6 +1143,7 @@
   "A record is not encrypted. The file was changed by hand.": "Ein Eintrag ist nicht verschlüsselt. Die Datei wurde von Hand geändert.",
   "A plain line was added to the activity log by hand.": "Dem Aktivitätsprotokoll wurde von Hand eine unverschlüsselte Zeile hinzugefügt.",
   "The database does not open with its key. It was changed by hand.": "Die Datenbank lässt sich mit ihrem Schlüssel nicht öffnen. Sie wurde von Hand geändert.",
-  "The LDAP address must look like ldaps://dc.example.com:636 or ldap://dc.example.com:389.": "Die LDAP-Adresse muss wie ldaps://dc.example.com:636 oder ldap://dc.example.com:389 aussehen.",
+  "The LDAP address must look like ldaps://dc.example.com or ldap://dc.example.com, with a port after a colon if it is not the usual one (1 to 65535).": "Die LDAP-Adresse muss wie ldaps://dc.example.com oder ldap://dc.example.com aussehen, mit einem Port nach einem Doppelpunkt, wenn es nicht der übliche ist (1 bis 65535).",
+  "The port is optional: without it ldaps:// uses 636 and ldap:// uses 389.": "Der Port ist optional: ohne ihn nutzt ldaps:// 636 und ldap:// 389.",
   "The user filter must contain {0}, where the user name goes, such as (sAMAccountName={0}).": "Der Benutzerfilter muss {0} enthalten, wo der Benutzername steht, etwa (sAMAccountName={0})."
 }

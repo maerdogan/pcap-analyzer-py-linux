@@ -778,6 +778,7 @@
   "A record is not encrypted. The file was changed by hand.": "Bir kayıt şifreli değil. Dosya elle değiştirilmiş.",
   "A plain line was added to the activity log by hand.": "Etkinlik kaydına elle şifresiz bir satır eklenmiş.",
   "The database does not open with its key. It was changed by hand.": "Veritabanı kendi anahtarıyla açılmıyor. Elle değiştirilmiş.",
-  "The LDAP address must look like ldaps://dc.example.com:636 or ldap://dc.example.com:389.": "LDAP adresi ldaps://dc.example.com:636 veya ldap://dc.example.com:389 gibi olmalı.",
+  "The LDAP address must look like ldaps://dc.example.com or ldap://dc.example.com, with a port after a colon if it is not the usual one (1 to 65535).": "LDAP adresi ldaps://dc.example.com ya da ldap://dc.example.com biçiminde olmalı; port olağan port değilse iki noktadan sonra yazılır (1–65535).",
+  "The port is optional: without it ldaps:// uses 636 and ldap:// uses 389.": "Port isteğe bağlı: yazılmazsa ldaps:// için 636, ldap:// için 389 kullanılır.",
   "The user filter must contain {0}, where the user name goes, such as (sAMAccountName={0}).": "Kullanıcı filtresi, kullanıcı adının geleceği yer olarak {0} içermeli, örneğin (sAMAccountName={0})."
 }

@@ -91,7 +91,8 @@
   <form method="post" action="/users/ldap">
     <input type="hidden" name="csrf_token" value="{{ form_token() }}">
     <div class="fields">
-      <label>{{ _("Server") }} <input name="url" value="{{ ldap.url }}" placeholder="ldaps://dc.example.com:636" spellcheck="false"></label>
+      <label>{{ _("Server") }} <input name="url" value="{{ ldap.url }}" placeholder="ldaps://dc.example.com" spellcheck="false"></label>
+      <p class="hint">{{ _("The port is optional: without it ldaps:// uses 636 and ldap:// uses 389.") }}</p>
       <label>{{ _("Service account DN") }} <input name="bind_dn" value="{{ ldap.bind_dn }}" placeholder="CN=svc-pcap,OU=Service,DC=example,DC=com" spellcheck="false"></label>
       <label>{{ _("Service account password") }} <input name="bind_password" type="password" autocomplete="new-password" placeholder="{{ _("unchanged") if ldap.bind_password else '' }}"></label>
       <label>{{ _("Base DN") }} <input name="base_dn" value="{{ ldap.base_dn }}" placeholder="DC=example,DC=com" spellcheck="false"></label>

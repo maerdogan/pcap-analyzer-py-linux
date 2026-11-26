@@ -12,7 +12,8 @@ from .. import vault
 
 FIELDS = ("url", "bind_dn", "bind_password", "base_dn", "user_filter")
 DEFAULTS = dict(url="", bind_dn="", bind_password="", base_dn="", user_filter="(uid={0})")
-URL = re.compile(r"ldaps?://[A-Za-z0-9.\-\[\]:]+(:\d{1,5})?/?")
+# the port is optional: ldaps:// defaults to 636 and ldap:// to 389, but a directory may listen anywhere
+URL = re.compile(r"ldaps?://(?:[A-Za-z0-9.\-]+|\[[0-9A-Fa-f:.]+\])(?::(\d{1,5}))?/?")
 TIMEOUT_S = 5
 CA_FILE_ENV = "PCAP_ANALYZER_LDAP_CA_FILE"  # a private CA for ldaps; without it the system's trusted certificates are used
 
@@ -33,8 +34,9 @@ def configured(settings):
 def problem(values):
     """The problem with new settings in plain words, or None."""
     url = values.get("url", "")
-    if url and not URL.fullmatch(url):
-        return "The LDAP address must look like ldaps://dc.example.com:636 or ldap://dc.example.com:389."
+    m = URL.fullmatch(url) if url else None
+    if url and (not m or (m.group(1) and not 1 <= int(m.group(1)) <= 65535)):
+        return "The LDAP address must look like ldaps://dc.example.com or ldap://dc.example.com, with a port after a colon if it is not the usual one (1 to 65535)."
     if "{0}" not in values.get("user_filter", ""):
         return "The user filter must contain {0}, where the user name goes, such as (sAMAccountName={0})."
     return None
